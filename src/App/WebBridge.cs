@@ -64,6 +64,10 @@ namespace Hv86.App
                 return;
             }
 
+            // каждая команда из страницы: без этого не видно, дошёл ли клик
+            // до ядра или страница мертва (её ошибки приходят как action=error)
+            Log.Info("UI", "страница -> " + action);
+
             Func<Dictionary<string, object>, Task> handler;
             lock (_gate) _handlers.TryGetValue(action, out handler);
 

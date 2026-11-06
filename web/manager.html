@@ -3,6 +3,32 @@
 <head>
 <meta charset="utf-8">
 <title>hv86</title>
+<script>
+/*
+ * Ошибки страницы не должны пропадать: их видно только в логе, потому что
+ * devtools в консолях выключены. Ставим ловушки ДО основного скрипта, иначе
+ * синтаксическая ошибка в нём останется невидимой.
+ */
+(function () {
+    function report(kind, text) {
+        try {
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({ action: "error", message: kind + ": " + text });
+            }
+        } catch (e) { /* хост уже закрыт */ }
+    }
+
+    window.onerror = function (message, source, line, column) {
+        report("js", message + " @" + line + ":" + column);
+        return false;
+    };
+
+    window.addEventListener("unhandledrejection", function (event) {
+        var reason = event && event.reason;
+        report("promise", String((reason && reason.message) || reason));
+    });
+})();
+</script>
 <style>/*{{THEME}}*/</style>
 </head>
 <body>

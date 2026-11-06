@@ -30,7 +30,20 @@
     var byId = function (id) { return document.getElementById(id); };
 
     var I18N = window.I18N || {};
-    var lang = localStorage.getItem("hv86.lang") || (navigator.language || "ru").slice(0, 2);
+
+    // Настройки страницы не должны ронять интерфейс: localStorage бросает
+    // SecurityError на «непрозрачном» origin (например, NavigateToString)
+    // и при запрете хранилища. Ошибка в этой строке раньше убивала весь
+    // скрипт - ни обработчиков, ни кнопок.
+    function storageGet(key, fallback) {
+        try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
+    }
+
+    function storageSet(key, value) {
+        try { localStorage.setItem(key, value); } catch (e) { /* хранилище недоступно */ }
+    }
+
+    var lang = storageGet("hv86.lang", (navigator.language || "ru").slice(0, 2));
     if (!I18N[lang]) lang = "ru";
 
     function T(key) {
@@ -724,7 +737,7 @@
 
     byId("lang").addEventListener("change", function () {
         lang = this.value;
-        localStorage.setItem("hv86.lang", lang);
+        storageSet("hv86.lang", lang);
         applyI18n();
         render();
     });

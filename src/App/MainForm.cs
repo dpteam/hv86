@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -24,6 +25,13 @@ namespace Hv86.App
     /// </summary>
     public sealed class MainForm : Form
     {
+        /// <summary>
+        /// «Origin» страницы менеджера. Именно origin, а не NavigateToString:
+        /// у about:blank он непрозрачный, и localStorage бросает SecurityError,
+        /// от которого умирал весь скрипт (кнопки переставали работать).
+        /// </summary>
+        private const string Origin = "http://hv86.local";
+
         private readonly WebView2 _web;
         private readonly WebBridge _bridge;
         private readonly System.Windows.Forms.Timer _timer;
@@ -36,6 +44,7 @@ namespace Hv86.App
         private ServiceRunner _engine;          // портативный движок: службы нет - держим движок сами
         private bool _engineTried;
         private bool _webReady;
+        private bool _pageReady;
         private bool _reallyClosing;
         private bool _trayHintShown;
 
@@ -123,6 +132,7 @@ namespace Hv86.App
                 core.NavigationStarting += delegate (object s, CoreWebView2NavigationStartingEventArgs e)
                 {
                     if (e.Uri != null &&
+                        !e.Uri.StartsWith(Origin, StringComparison.OrdinalIgnoreCase) &&
                         !e.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase) &&
                         !e.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                     {
@@ -130,6 +140,11 @@ namespace Hv86.App
                         OpenExternal(e.Uri);
                     }
                 };
+
+                // страница отдаётся своим обработчиком, как у консоли: origin
+                // нужен настоящий (см. Origin), да и devtools так понятнее
+                core.AddWebResourceRequestedFilter(Origin + "/*", CoreWebView2WebResourceContext.All);
+                core.WebResourceRequested += OnManagerRequest;
 
                 core.WebMessageReceived += delegate (object s, CoreWebView2WebMessageReceivedEventArgs e)
                 {
@@ -140,10 +155,20 @@ namespace Hv86.App
                     _bridge.Handle(json);
                 };
 
-                core.NavigateToString(BuildHtml());
+                core.Navigate(Origin + "/index.html");
                 _webReady = true;
 
                 Log.Info("UI", "webview2 " + core.Environment.BrowserVersionString + " готов");
+
+                // если страница так и не сказала ready - интерфейс мёртв, и молчать об
+                // этом нельзя: кнопки просто ничего не делают
+                _ = Task.Delay(10000).ContinueWith(delegate
+                {
+                    if (_pageReady) return;
+
+                    Log.Error("UI", "страница не прислала ready за 10 с: интерфейс не работает " +
+                                    "(ошибки страницы должны быть строкой выше в этом же логе)");
+                });
 
                 // первое состояние - сразу, не дожидаясь тика таймера
                 PushState();
@@ -157,6 +182,42 @@ namespace Hv86.App
                     "\r\n\r\nУстановите Microsoft Edge WebView2 Runtime:\r\n" +
                     "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
                     AppInfo.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        /// <summary>
+        /// Отдаёт страницу менеджера по http://hv86.local/. Всё в ней вшито
+        /// (css/js/i18n), поэтому маршрут один - остальное 404.
+        /// </summary>
+        private void OnManagerRequest(object sender, CoreWebView2WebResourceRequestedEventArgs e)
+        {
+            try
+            {
+                string path = e.Request.Uri ?? "";
+                int query = path.IndexOf('?');
+                if (query >= 0) path = path.Substring(0, query);
+
+                bool page = path.EndsWith("/index.html", StringComparison.OrdinalIgnoreCase) ||
+                            path.Equals(Origin + "/", StringComparison.OrdinalIgnoreCase);
+
+                if (!page)
+                {
+                    e.Response = _web.CoreWebView2.Environment.CreateWebResourceResponse(
+                        null, 404, "Not Found", "Content-Length: 0");
+                    return;
+                }
+
+                byte[] bytes = Encoding.UTF8.GetBytes(BuildHtml());
+
+                e.Response = _web.CoreWebView2.Environment.CreateWebResourceResponse(
+                    new MemoryStream(bytes, false), 200, "OK",
+                    "Content-Type: text/html; charset=utf-8\r\n" +
+                    "Content-Length: " + bytes.Length + "\r\n" +
+                    "Cache-Control: no-store");
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("UI", "отдача страницы", ex);
             }
         }
 
@@ -188,8 +249,20 @@ namespace Hv86.App
 
         private void RegisterActions()
         {
-            _bridge.Register("ready", delegate { PushState(); });
+            _bridge.Register("ready", delegate
+            {
+                _pageReady = true;
+                PushState();
+            });
+
             _bridge.Register("refresh", delegate { PushState(); });
+
+            // ошибки самой страницы (window.onerror в manager.html): иначе
+            // сломанный интерфейс выглядит как "кнопки не работают" и молчит
+            _bridge.Register("error", delegate (Dictionary<string, object> message)
+            {
+                Log.Error("UI", "страница: " + Json.GetString(message, "message", ""));
+            });
 
             _bridge.Register("service.install", async delegate { await ServiceAction("install"); });
             _bridge.Register("service.start", async delegate { await ServiceAction("start"); });
