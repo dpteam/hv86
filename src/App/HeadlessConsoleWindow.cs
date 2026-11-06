@@ -30,6 +30,7 @@ namespace Hv86.App
     public sealed class HeadlessConsoleWindow : Form
     {
         private readonly string _vmId;
+        private readonly string _pipeName;
         private readonly ConsoleScreen _screen;
         private readonly Label _status;
         private readonly Button _pauseButton;
@@ -39,9 +40,10 @@ namespace Hv86.App
         private string _state = "connecting";
         private bool _closing;
 
-        public HeadlessConsoleWindow(string vmId, string name)
+        public HeadlessConsoleWindow(string vmId, string name, string pipeName = null)
         {
             _vmId = vmId;
+            _pipeName = string.IsNullOrEmpty(pipeName) ? PipeNames.VmHost(vmId) : pipeName;
 
             Text = "hv86 — " + name + " (headless)";
             BackColor = Color.Black;
@@ -146,7 +148,7 @@ namespace Hv86.App
 
             try { _client?.Dispose(); } catch { }
 
-            PipeClient client = new PipeClient(PipeNames.VmHost(_vmId));
+            PipeClient client = new PipeClient(_pipeName);
             client.EventReceived += OnEngineEvent;
 
             if (!await client.ConnectAsync(800).ConfigureAwait(false))

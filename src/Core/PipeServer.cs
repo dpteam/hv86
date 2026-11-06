@@ -13,6 +13,9 @@ namespace Hv86.Core
     {
         public const string Service = "hv86";
         public static string VmHost(string vmId) { return "hv86-vm-" + vmId; }
+
+        /// <summary>Канал горячей реплики (второй процесс той же ВМ).</summary>
+        public static string VmReplica(string vmId) { return "hv86-vm-" + vmId + "-r"; }
     }
 
     /// <summary>Ошибка, которую можно показать пользователю как есть.</summary>

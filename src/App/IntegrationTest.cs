@@ -190,8 +190,56 @@ namespace Hv86.App
                 Dictionary<string, object> reverted = WaitState(client, id, "running", 90000);
                 Ok("vm.revert", "state=" + Json.GetString(reverted, "state", ""));
 
+                // ---- горячая реплика: падение основной не должно ронять ВМ
+                Call(client, "vm.update", Json.Obj("id", id,
+                    "ft_mode", "replica", "ft_interval_ms", 3000), 30000);
+
+                Call(client, "vm.stop", Json.Obj("id", id), 120000);
+                WaitState(client, id, "stopped", 60000);
+
+                Call(client, "vm.start", Json.Obj("id", id));
+                WaitState(client, id, "running", 90000);
+
+                string replicaState = WaitReplica(client, id, "warm", 180000);
+
+                if (replicaState == "warm")
+                    Ok("ft replica", "second process is warm and paused");
+                else
+                    Fail("replica did not become warm: '" + replicaState + "'");
+
+                // убиваем основную: служба обязана повысить вторую, а не грузить
+                // ВМ заново с чекпоинта
+                Call(client, "vm.debug.kill", Json.Obj("id", id));
+
+                Dictionary<string, object> promoted = WaitPipe(client, id, "-r", 120000);
+                string promotedPipe = Json.GetString(promoted, "pipe", "");
+
+                if (promotedPipe.EndsWith("-r", StringComparison.Ordinal) &&
+                    Json.GetString(promoted, "state", "") == "running")
+                    Ok("replica promoted", "pipe=" + promotedPipe + ", restarts=" +
+                        Json.GetInt(promoted, "restarts", 0));
+                else
+                    Fail("VM did not continue on the replica: " + Json.Stringify(promoted));
+
+                bool promotedEvent = false;
+                lock (events)
+                {
+                    for (int i = 0; i < events.Count; i++)
+                        if (events[i].IndexOf("Реплика повышена", StringComparison.Ordinal) >= 0)
+                            promotedEvent = true;
+                }
+
+                if (!promotedEvent) Fail("no promotion event was reported");
+                else Ok("promotion event", "service reported the replica takeover");
+
+                // дальше по тесту реплика не нужна: обычные чекпоинты
+                Call(client, "vm.update", Json.Obj("id", id,
+                    "ft_mode", "checkpoint", "ft_interval_ms", 20000), 30000);
+
                 // ---- сеть: relay (WISP) и произвольный TCP из гостя
                 // поднимаем локальный echo-сервер и просим relay соединиться с ним
+                int relayPort = 0;
+
                 using (System.Net.Sockets.TcpListener echo = new System.Net.Sockets.TcpListener(
                            System.Net.IPAddress.Loopback, 0))
                 {
@@ -222,7 +270,7 @@ namespace Hv86.App
                     Call(client, "vm.start", Json.Obj("id", id));
                     WaitState(client, id, "running", 90000);
 
-                    int relayPort = WaitRelayPort(client, id, 60000);
+                    relayPort = WaitRelayPort(client, id, 60000);
                     Ok("wisp relay listening", "127.0.0.1:" + relayPort);
 
                     // самое важное: страница v86 сама подключилась к релею
@@ -249,6 +297,58 @@ namespace Hv86.App
                         Fail("egress policy did not block loopback: " + blockedDetail);
 
                     try { echo.Stop(); } catch { }
+                }
+
+                // ---- реплика в режиме relay: после повышения она обязана
+                // занять тот же порт релея - иначе адрес в state смотрит в никуда
+                using (System.Net.Sockets.TcpListener echo2 = new System.Net.Sockets.TcpListener(
+                           System.Net.IPAddress.Loopback, 0))
+                {
+                    echo2.Start();
+                    int echo2Port = ((System.Net.IPEndPoint)echo2.LocalEndpoint).Port;
+
+                    System.Threading.Tasks.Task echo2Task = System.Threading.Tasks.Task.Run(async delegate
+                    {
+                        try
+                        {
+                            using (System.Net.Sockets.TcpClient peer = await echo2.AcceptTcpClientAsync())
+                            using (System.Net.Sockets.NetworkStream stream = peer.GetStream())
+                            {
+                                byte[] buffer = new byte[256];
+                                int read = await stream.ReadAsync(buffer, 0, buffer.Length);
+                                if (read > 0) await stream.WriteAsync(buffer, 0, read);
+                            }
+                        }
+                        catch
+                        {
+                            // тест сам решит
+                        }
+                    });
+
+                    Call(client, "vm.update", Json.Obj("id", id,
+                        "egress_mode", "any", "ft_mode", "replica", "ft_interval_ms", 3000), 30000);
+
+                    string relayReplica = WaitReplica(client, id, "warm", 180000);
+
+                    if (relayReplica == "warm") Ok("relay replica", "warm, holds the relay port");
+                    else Fail("relay replica did not become warm: '" + relayReplica + "'");
+
+                    Call(client, "vm.debug.kill", Json.Obj("id", id));
+                    Dictionary<string, object> relayPromoted = WaitPipe(client, id, "-r", 120000);
+
+                    if (Json.GetString(relayPromoted, "state", "") == "running")
+                        Ok("relay promotion", "VM continued on the replica after a crash");
+                    else
+                        Fail("relay promotion did not happen: " + Json.Stringify(relayPromoted));
+
+                    // проверяем именно релей: echo должен пройти через тот же порт
+                    string promotedDetail;
+                    bool promotedOk = WispTestClient.Echo(relayPort, echo2Port, "hv86-promoted", out promotedDetail);
+
+                    if (promotedOk) Ok("promoted relay TCP", promotedDetail);
+                    else Fail("relay died with the primary: " + promotedDetail);
+
+                    try { echo2.Stop(); } catch { }
                 }
 
                 // ---- настройки: имя и параметры FT
@@ -470,6 +570,46 @@ namespace Hv86.App
 
                 System.Threading.Thread.Sleep(300);
             }
+        }
+
+        /// <summary>Ждёт, пока реплика прогреется ("warm") или отвалится.</summary>
+        private static string WaitReplica(PipeClient client, string id, string expected, int timeoutMs)
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            string last = "";
+
+            while (watch.ElapsedMilliseconds < timeoutMs)
+            {
+                Dictionary<string, object> view = Call(client, "vm.get", Json.Obj("id", id), 15000);
+                last = Json.GetString(view, "replica", "");
+
+                if (last == expected) return last;
+                if (Json.GetString(view, "state", "") == "failed") return last;
+
+                System.Threading.Thread.Sleep(400);
+            }
+
+            return last;
+        }
+
+        /// <summary>Ждёт, пока служба переключит ВМ на другой канал (повышение реплики).</summary>
+        private static Dictionary<string, object> WaitPipe(PipeClient client, string id, string suffix, int timeoutMs)
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            Dictionary<string, object> last = null;
+
+            while (watch.ElapsedMilliseconds < timeoutMs)
+            {
+                last = Call(client, "vm.get", Json.Obj("id", id), 15000);
+                string pipe = Json.GetString(last, "pipe", "");
+
+                if (pipe.EndsWith(suffix, StringComparison.Ordinal)) return last;
+                if (Json.GetString(last, "state", "") == "failed") return last;
+
+                System.Threading.Thread.Sleep(300);
+            }
+
+            return last;
         }
 
         /// <summary>Ждёт появления чекпоинтов кольца (ft.interval_ms).</summary>

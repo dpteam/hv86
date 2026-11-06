@@ -316,6 +316,7 @@
             <select id="setFtMode">
               <option value="off">off</option>
               <option value="checkpoint">checkpoint</option>
+              <option value="replica">replica</option>
             </select>
           </div>
           <div>
@@ -323,6 +324,7 @@
             <input type="number" id="setInterval" min="2" max="600" step="1">
           </div>
         </div>
+        <div class="hint" data-i18n="set.ftHint">Replica keeps a second paused process in sync; it takes over after a crash. Web engine only.</div>
       </div>
 
       <div class="field">

@@ -29,6 +29,8 @@ namespace Hv86.VmHost
         private readonly bool _showConsole;
         private readonly string _restorePath;
         private readonly bool _smoke;
+        private readonly bool _replica;
+        private readonly int _replicaRelayPort;
 
         private VmDefinition _vm;
         private VmHostForm _form;
@@ -51,6 +53,8 @@ namespace Hv86.VmHost
 
         private Dictionary<string, object> _bootConfig;
         private TaskCompletionSource<Dictionary<string, object>> _xhrProbe;
+        private TaskCompletionSource<bool> _restoreWait;
+        private bool _promoted;
 
         private sealed class PendingSave
         {
@@ -63,12 +67,15 @@ namespace Hv86.VmHost
                 new TaskCompletionSource<Dictionary<string, object>>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
-        public VmHostRunner(string vmId, bool showConsole, string restorePath, bool smoke)
+        public VmHostRunner(string vmId, bool showConsole, string restorePath, bool smoke, bool replica = false,
+            int relayPort = 0)
         {
             _vmId = vmId;
             _showConsole = showConsole;
             _restorePath = restorePath;
             _smoke = smoke;
+            _replica = replica;
+            _replicaRelayPort = relayPort;
         }
 
         // ------------------------------------------------------------------ run
@@ -107,7 +114,7 @@ namespace Hv86.VmHost
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            _form = new VmHostForm(_vm.Id, _vm.Name);
+            _form = new VmHostForm(_vm.Id, _vm.Name, _replica);
 
             if (!_showConsole) _form.PlaceOffScreen();
 
@@ -148,32 +155,24 @@ namespace Hv86.VmHost
                     }
                 }
 
-                _server = new PipeServer(PipeNames.VmHost(_vm.Id), DispatchAsync);
+                _server = new PipeServer(_replica ? PipeNames.VmReplica(_vm.Id) : PipeNames.VmHost(_vm.Id),
+                    DispatchAsync);
                 _server.Start();
 
                 _forwarder = new PortForwarder(message => _form.Post(message));
                 _forwarder.Report += text => Broadcast("vm.forward", Json.Obj("id", _vmId, "text", text));
 
-                // проброс портов работает только на NAT-стеке fetch: в режиме
-                // relay внутрь гостя подключиться нечем
-                _forwarder.Apply(_vm.NetMode == "nat" ? _vm.Forwards : new List<ForwardRule>());
-
-                // полный доступ в сеть: wisp-релей поднимаем только если он
-                // включён, иначе остаётся fetch (HTTP + проброс портов)
-                if (_vm.NetMode == "relay")
+                // реплика молчит: порты и релей занимает основная ВМ. Свой
+                // релей реплика поднимет на её же порту уже после повышения
+                if (!_replica)
                 {
-                    _relay = new WispRelay(BuildEgressPolicy(_vm));
+                    // проброс портов работает только на NAT-стеке fetch: в режиме
+                    // relay внутрь гостя подключиться нечем
+                    _forwarder.Apply(_vm.NetMode == "nat" ? _vm.Forwards : new List<ForwardRule>());
 
-                    string relayError;
-                    if (!_relay.Start(out relayError))
-                    {
-                        Log.Warn("NET", "wisp relay не поднялся, остаётся fetch: " + relayError);
-                        _relay = null;
-                    }
-                    else
-                    {
-                        Log.Info("NET", _relay.PolicyDescribe());
-                    }
+                    // полный доступ в сеть: wisp-релей поднимаем только если он
+                    // включён, иначе остаётся fetch (HTTP + проброс портов)
+                    if (_vm.NetMode == "relay") StartRelay(0);
                 }
 
                 _bootConfig = BuildBootConfig();
@@ -274,6 +273,12 @@ namespace Hv86.VmHost
                 case "xhrResult":
                     _xhrProbe?.TrySetResult(message);
                     break;
+
+                case "restoreDone":
+                    _restoreWait?.TrySetResult(Json.GetBool(message, "ok", false));
+                    if (!Json.GetBool(message, "ok", false))
+                        _error = Json.GetString(message, "error", "restore failed");
+                    break;
             }
         }
 
@@ -353,7 +358,7 @@ namespace Hv86.VmHost
                 "net", Json.Obj(
                     "type", string.IsNullOrEmpty(_vm.NetType) ? "virtio" : _vm.NetType,
                     "mode", _vm.NetMode,
-                    "relayUrl", _relay != null ? "wisp://127.0.0.1:" + _relay.Port : "fetch"));
+                    "relayUrl", RelayUrl()));
 
             Dictionary<string, object> hda = MediaDescriptor(_vm.HdaPath);
             if (hda != null) config["hda"] = hda;
@@ -374,7 +379,44 @@ namespace Hv86.VmHost
                     "readonly", _vm.ShareReadOnly);
             }
 
+            // реплика стартует с загруженным state'ом и НЕ запускает CPU,
+            // пока её не повысят
+            if (_replica) config["paused"] = true;
+
             return config;
+        }
+
+        /// <summary>
+        /// Куда v86 ходит за произвольным TCP. У реплики своего релея ещё нет,
+        /// но порт известен заранее: после повышения она займёт именно его,
+        /// поэтому адрес в state остаётся рабочим.
+        /// </summary>
+        private string RelayUrl()
+        {
+            int port = _relay != null ? _relay.Port : (_replica ? _replicaRelayPort : 0);
+
+            return port > 0 ? "wisp://127.0.0.1:" + port : "fetch";
+        }
+
+        /// <summary>
+        /// Поднимает wisp-релей на заданном порту (0 - любой свободный).
+        /// Отдельным методом, потому что реплика вызывает его лениво, уже
+        /// после повышения - на порту, который был у основной ВМ.
+        /// </summary>
+        private void StartRelay(int port)
+        {
+            WispRelay relay = new WispRelay(BuildEgressPolicy(_vm));
+
+            string error;
+            if (!relay.Start(port, out error))
+            {
+                Log.Warn("NET", "wisp relay не поднялся, остаётся fetch: " + error);
+                relay.Dispose();
+                return;
+            }
+
+            _relay = relay;
+            Log.Info("NET", _relay.PolicyDescribe());
         }
 
         /// <summary>Политика egress из vm.json; по умолчанию - без ограничений.</summary>
@@ -739,6 +781,55 @@ namespace Hv86.VmHost
                     await DetachAsync(Json.GetString(parameters, "kind", "cdrom")).ConfigureAwait(false);
                     return Json.Obj("ok", true);
 
+                case "vm.restoreState":
+                {
+                    string path = Json.GetString(parameters, "path", "");
+
+                    if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                        throw new Hv86Exception("state-файл не найден: " + path);
+
+                    const string name = "replica-state.bin";
+
+                    lock (_gate) _stateFiles[name] = path;
+
+                    // ждём именно ответ страницы: «paused» она выставляет ещё
+                    // до восстановления, и по нему нельзя понять, готово ли
+                    TaskCompletionSource<bool> wait = new TaskCompletionSource<bool>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+
+                    _restoreWait = wait;
+                    _form.Post(Json.Obj("action", "restore", "url", VmResourceServer.Origin + "/state/" + name));
+
+                    Task finished = await Task.WhenAny(wait.Task, Task.Delay(180000)).ConfigureAwait(false);
+                    _restoreWait = null;
+
+                    if (finished != wait.Task) throw new Hv86Exception("страница не восстановила состояние за 180 с");
+                    if (!await wait.Task.ConfigureAwait(false)) throw new Hv86Exception("восстановление состояния не удалось");
+
+                    Log.Info("VMHOST", "реплика приняла состояние (" + (new FileInfo(path).Length / 1024 / 1024) + " МБ)");
+
+                    return Json.Obj("ok", true, "instructions", _instructions);
+                }
+
+                case "vm.promote":
+                {
+                    if (_promoted) return Json.Obj("ok", true);
+                    _promoted = true;
+
+                    // сеть возвращаем на себя: релей занимает порт основной ВМ,
+                    // правила проброса снова применяются к живому гостю
+                    if (_vm.NetMode == "relay" && _relay == null)
+                        StartRelay(_replicaRelayPort);
+
+                    _forwarder.Apply(_vm.NetMode == "nat" ? _vm.Forwards : new List<ForwardRule>());
+
+                    _form.Post(Json.Obj("action", "thaw"));
+                    Log.Info("VMHOST", "реплика повышена до основной (порт релея " +
+                                       (_relay == null ? "нет" : _relay.Port.ToString(CultureInfo.InvariantCulture)) + ")");
+
+                    return Json.Obj("ok", true, "relay_port", _relay == null ? 0 : _relay.Port);
+                }
+
                 case "vm.shutdown":
                     _ = Task.Run(() => ShutdownAsync("service"));
                     return Json.Obj("ok", true);
@@ -858,13 +949,20 @@ namespace Hv86.VmHost
 
         private async Task WaitStateAsync(string expected, int timeoutMs)
         {
+            await WaitStateReachedAsync(expected, timeoutMs).ConfigureAwait(true);
+        }
+
+        private async Task<bool> WaitStateReachedAsync(string expected, int timeoutMs)
+        {
             DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
 
             while (DateTime.UtcNow < deadline)
             {
-                if (_state == expected) return;
+                if (_state == expected) return true;
                 await Task.Delay(100).ConfigureAwait(true);
             }
+
+            return false;
         }
 
         // ----------------------------------------------------------------- smoke

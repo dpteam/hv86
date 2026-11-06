@@ -44,6 +44,13 @@ namespace Hv86.Vm
             public bool Restarting;
             public int ConsecutiveFailures;
             public string LastRestore;
+
+            // горячая реплика (ft.mode=replica): второй процесс той же ВМ,
+            // который стоит на паузе с последним чекпоинтом и ждёт повышения
+            public VmProcess Replica;
+            public string ReplicaState = "";
+            public DateTime ReplicaUtc = DateTime.UtcNow;
+            public bool ReplicaStarting;
         }
 
         public VmManager()
@@ -139,6 +146,8 @@ namespace Hv86.Vm
                 view["alive"] = runtime.Proc != null && !runtime.Proc.HasExited;
                 view["relay_port"] = runtime.RelayPort;
                 view["relay_clients"] = runtime.RelayClients;
+                view["pipe"] = runtime.Proc == null ? "" : runtime.Proc.PipeName;
+                view["replica"] = runtime.ReplicaState;
 
                 list.Add(view);
             }
@@ -156,6 +165,9 @@ namespace Hv86.Vm
             view["alive"] = runtime.Proc != null && !runtime.Proc.HasExited;
             view["relay_port"] = runtime.RelayPort;
             view["relay_clients"] = runtime.RelayClients;
+            view["pipe"] = runtime.Proc == null ? "" : runtime.Proc.PipeName;
+            view["replica"] = runtime.ReplicaState;
+            view["replica_alive"] = runtime.Replica != null && !runtime.Replica.HasExited;
             return view;
         }
 
@@ -374,6 +386,16 @@ namespace Hv86.Vm
                 "text", restorePath == null ? "ВМ запущена" : "ВМ восстановлена из чекпоинта",
                 "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
 
+            // режим реплики: рядом поднимаем второй процесс, который будет
+            // стоять на паузе с последним чекпоинтом
+            if (runtime.Def.FtMode == "replica")
+            {
+                if (runtime.Def.IsHeadless)
+                    Log.Info("FT", "реплика: headless-движок не умеет, для " + id + " остаются чекпоинты");
+                else
+                    StartReplica(runtime);
+            }
+
             return runtime.Def.ToView();
         }
 
@@ -381,11 +403,19 @@ namespace Hv86.Vm
         {
             VmRuntime runtime = Get(id);
             VmProcess process;
+            VmProcess replica;
 
             lock (_gate)
             {
                 process = runtime.Proc;
                 runtime.Proc = null;
+
+                // реплику гасим всегда: без основной она бесполезна, а место и
+                // второй WebView2 занимает
+                replica = runtime.Replica;
+                runtime.Replica = null;
+                runtime.ReplicaState = "";
+                runtime.ReplicaStarting = false;
 
                 if (process == null || process.HasExited)
                 {
@@ -399,6 +429,15 @@ namespace Hv86.Vm
             }
 
             EmitState(runtime);
+
+            if (replica != null && !replica.HasExited)
+            {
+                Log.Info("FT", "остановка реплики " + id);
+                replica.Kill();
+                await replica.WaitExitAsync(5000).ConfigureAwait(false);
+            }
+
+            replica?.Dispose();
 
             if (process != null && !process.HasExited)
             {
@@ -710,6 +749,17 @@ namespace Hv86.Vm
             // не нужно, слушатели живут в vmhost
             if (runtime.Proc != null && !runtime.Proc.HasExited)
             {
+                // режим отказоустойчивости тоже применяем сразу: переключили на
+                // replica - поднимаем второй процесс, ушли с него - гасим
+                if (runtime.Def.FtMode == "replica" && !runtime.Def.IsHeadless)
+                {
+                    StartReplica(runtime);
+                }
+                else if (runtime.Def.FtMode != "replica")
+                {
+                    StopReplica(runtime, "режим отказоустойчивости изменён");
+                }
+
                 List<object> rules = new List<object>();
                 foreach (ForwardRule rule in runtime.Def.Forwards) rules.Add(rule.ToDict());
 
@@ -857,7 +907,11 @@ namespace Hv86.Vm
             }
 
             if (def.State != "running") return;
-            if (def.FtMode != "checkpoint") return;
+
+            // реплика: второй процесс должен быть жив и прогрет
+            if (def.FtMode == "replica" && !def.IsHeadless) SuperviseReplica(runtime);
+
+            if (def.FtMode == "off") return;
             if (runtime.RingBusy) return;
             if (DateTime.UtcNow < runtime.NextRingUtc) return;
 
@@ -885,7 +939,7 @@ namespace Hv86.Vm
                     long instructions = Json.GetLong(result, "instructions", runtime.Instructions);
                     long ms = Json.GetLong(result, "ms", 0);
 
-                    CheckpointStore.SaveRing(runtime.Def, temp, instructions);
+                    string saved = CheckpointStore.SaveRing(runtime.Def, temp, instructions);
 
                     runtime.ConsecutiveFailures = 0;
 
@@ -894,6 +948,17 @@ namespace Hv86.Vm
                         "kind", "ring",
                         "text", "Чекпоинт за " + ms + " мс",
                         "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+
+                    // реплика: тот же чекпоинт сразу отдаём второму процессу,
+                    // чтобы он отставал от основной на один интервал, а не на
+                    // всё время с момента своего запуска
+                    VmProcess replica = null;
+
+                    if (runtime.Def.FtMode == "replica")
+                        lock (_gate) replica = runtime.Replica;
+
+                    if (replica != null && !replica.HasExited)
+                        await PushReplicaStateAsync(runtime, replica, saved).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -910,6 +975,285 @@ namespace Hv86.Vm
                     runtime.RingBusy = false;
                 }
             });
+        }
+
+        // ------------------------------------------------------------- реплика
+
+        /// <summary>
+        /// Поднимает второй процесс той же ВМ. Он грузит последний чекпоинт и
+        /// стоит на паузе: пока основная работает, реплика только принимает
+        /// новые состояния, а CPU не крутит.
+        /// </summary>
+        private void StartReplica(VmRuntime runtime)
+        {
+            string id = runtime.Def.Id;
+
+            lock (_gate)
+            {
+                if (runtime.ReplicaStarting) return;
+                if (runtime.Replica != null && !runtime.Replica.HasExited) return;
+                if (runtime.Proc == null || runtime.Proc.HasExited) return;
+
+                runtime.ReplicaStarting = true;
+                runtime.ReplicaState = "starting";
+                runtime.ReplicaUtc = DateTime.UtcNow;
+            }
+
+            int relayPort = runtime.RelayPort;
+
+            Task.Run(async () =>
+            {
+                VmProcess replica = null;
+
+                try
+                {
+                    replica = await VmProcess.LaunchAsync(runtime.Def, false, null,
+                        (name, data) => OnReplicaEvent(runtime, name, data), true, relayPort).ConfigureAwait(false);
+
+                    bool keep;
+
+                    lock (_gate)
+                    {
+                        // режим мог смениться, пока мы запускали процесс:
+                        // тогда реплика не нужна и её надо погасить
+                        keep = runtime.Def.FtMode == "replica" &&
+                               runtime.Proc != null && !runtime.Proc.HasExited &&
+                               (runtime.Def.State == "running" || runtime.Def.State == "paused");
+
+                        if (keep) runtime.Replica = replica;
+                    }
+
+                    if (!keep)
+                    {
+                        // пока поднимали - ВМ остановили или сменили режим: реплика не нужна
+                        Log.Info("FT", "реплика " + id + " не нужна: ВМ не в режиме реплики");
+                        try { replica.Kill(); } catch { }
+                        replica.Dispose();
+                        return;
+                    }
+
+                    Emit("ft.event", Json.Obj(
+                        "id", id,
+                        "kind", "replica",
+                        "text", "Реплика запущена (канал " + replica.PipeName + ")",
+                        "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+
+                    // реплика стартует «пустой»: сразу отдаём ей свежий чекпоинт,
+                    // не дожидаясь следующего круга кольца
+                    string ring = CheckpointStore.NewestRing(runtime.Def);
+
+                    if (ring != null)
+                        await PushReplicaStateAsync(runtime, replica, ring).ConfigureAwait(false);
+
+                    string state;
+                    lock (_gate) state = runtime.ReplicaState;
+
+                    Log.Info("FT", "реплика " + id + ": " + (state == "warm" ? "прогрета" : "ждёт чекпоинт"));
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception("FT", "реплика " + id, ex);
+
+                    lock (_gate)
+                    {
+                        runtime.Replica = null;
+                        runtime.ReplicaState = "";
+                    }
+
+                    if (replica != null)
+                    {
+                        try { replica.Kill(); } catch { }
+                        try { replica.Dispose(); } catch { }
+                    }
+
+                    Emit("ft.event", Json.Obj(
+                        "id", id,
+                        "kind", "replica-failed",
+                        "text", "Реплика не поднялась: " + ex.Message,
+                        "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+                }
+                finally
+                {
+                    lock (_gate) runtime.ReplicaStarting = false;
+                }
+            });
+        }
+
+        /// <summary>Отдаёт реплике состояние чекпоинта. true - она прогрета.</summary>
+        private async Task<bool> PushReplicaStateAsync(VmRuntime runtime, VmProcess replica, string statePath)
+        {
+            if (replica == null || replica.HasExited) return false;
+
+            try
+            {
+                await replica.Client.CallForResultAsync("vm.restoreState",
+                    Json.Obj("path", statePath), 180000).ConfigureAwait(false);
+
+                lock (_gate)
+                {
+                    runtime.ReplicaState = "warm";
+                    runtime.ReplicaUtc = DateTime.UtcNow;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("FT", "реплика " + runtime.Def.Id + " не приняла состояние: " + ex.Message);
+
+                lock (_gate) runtime.ReplicaState = "starting";
+
+                return false;
+            }
+        }
+
+        /// <summary>Гасит реплику (переключение режима, остановка ВМ).</summary>
+        private void StopReplica(VmRuntime runtime, string reason)
+        {
+            VmProcess replica;
+
+            lock (_gate)
+            {
+                replica = runtime.Replica;
+                runtime.Replica = null;
+                runtime.ReplicaState = "";
+                runtime.ReplicaUtc = DateTime.UtcNow;
+            }
+
+            if (replica == null) return;
+
+            Log.Info("FT", "реплика " + runtime.Def.Id + " гасится: " + reason);
+
+            try { replica.Kill(); } catch { }
+            replica.Dispose();
+
+            Emit("ft.event", Json.Obj(
+                "id", runtime.Def.Id,
+                "kind", "replica-off",
+                "text", "Реплика остановлена: " + reason,
+                "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+        }
+
+        /// <summary>Сторож реплики: упавшую поднимаем заново, живую не трогаем.</summary>
+        private void SuperviseReplica(VmRuntime runtime)
+        {
+            VmProcess dead = null;
+            bool restart;
+
+            lock (_gate)
+            {
+                if (runtime.Replica != null && runtime.Replica.HasExited)
+                {
+                    dead = runtime.Replica;
+                    runtime.Replica = null;
+                    runtime.ReplicaState = "";
+                    runtime.ReplicaUtc = DateTime.UtcNow;
+                }
+
+                restart = runtime.Replica == null && !runtime.ReplicaStarting &&
+                          (DateTime.UtcNow - runtime.ReplicaUtc).TotalSeconds > 15;
+            }
+
+            if (dead != null)
+            {
+                Log.Warn("FT", "реплика " + runtime.Def.Id + " завершилась, поднимаю заново");
+                try { dead.Dispose(); } catch { }
+
+                Emit("ft.event", Json.Obj(
+                    "id", runtime.Def.Id,
+                    "kind", "replica-lost",
+                    "text", "Реплика потеряна: поднимаю заново",
+                    "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+            }
+
+            if (restart) StartReplica(runtime);
+        }
+
+        /// <summary>
+        /// Повышение реплики: единственный путь, которым ВМ переживает падение
+        /// основной без холодной загрузки. Возвращает true, если ВМ продолжает
+        /// работать уже на втором процессе.
+        /// </summary>
+        private async Task<bool> TryPromoteAsync(VmRuntime runtime, string reason)
+        {
+            VmProcess replica;
+            string state;
+
+            lock (_gate)
+            {
+                replica = runtime.Replica;
+                state = runtime.ReplicaState;
+            }
+
+            if (replica == null || replica.HasExited || state != "warm") return false;
+
+            string id = runtime.Def.Id;
+
+            Log.Warn("FT", "падение основной ВМ " + id + ": повышаю реплику");
+
+            try
+            {
+                await replica.Client.CallForResultAsync("vm.promote", null, 60000).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("FT", "реплика " + id + " не повысилась: " + ex.Message);
+
+                lock (_gate)
+                {
+                    runtime.Replica = null;
+                    runtime.ReplicaState = "";
+                    runtime.ReplicaUtc = DateTime.UtcNow;
+                }
+
+                try { replica.Kill(); } catch { }
+                try { replica.Dispose(); } catch { }
+
+                return false;
+            }
+
+            lock (_gate)
+            {
+                runtime.Replica = null;
+                runtime.ReplicaState = "";
+                runtime.ReplicaUtc = DateTime.UtcNow;
+
+                runtime.Proc = replica;
+                runtime.StartedUtc = DateTime.UtcNow;
+                runtime.LastBeatUtc = DateTime.UtcNow;
+                runtime.Instructions = 0;
+                runtime.Mips = 0;
+                runtime.LastRestore = null;
+                runtime.NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, runtime.Def.FtIntervalMs));
+
+                runtime.Def.Restarts++;
+                runtime.Def.State = "running";
+
+                // причина падения остаётся в ft.event, а не в last_error:
+                // ВМ-то работает, красной строки в UI быть не должно
+                runtime.Def.LastError = "";
+
+                try { VmStore.Save(runtime.Def); } catch { }
+            }
+
+            EmitState(runtime);
+            Emit("ft.event", Json.Obj(
+                "id", id,
+                "kind", "promoted",
+                "text", "Реплика повышена до основной: " + reason,
+                "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+
+            // на замену сразу поднимаем новую реплику
+            StartReplica(runtime);
+
+            return true;
+        }
+
+        /// <summary>События реплики в общий поток не пускаем: у неё свой heartbeat.</summary>
+        private void OnReplicaEvent(VmRuntime runtime, string name, Dictionary<string, object> data)
+        {
+            if (name == "vm.state")
+                Log.Debug("FT", "реплика " + runtime.Def.Id + ": " + Json.GetString(data, "state", ""));
         }
 
         private void HandleCrash(VmRuntime runtime, string reason)
@@ -931,6 +1275,11 @@ namespace Hv86.Vm
                 try
                 {
                     old?.Dispose();
+
+                    // 1) есть прогретая реплика - не перезапускаем ВМ с
+                    // чекпоинта, а повышаем второй процесс: гость продолжает
+                    // работу с того места, где был последний чекпоинт
+                    if (await TryPromoteAsync(runtime, reason).ConfigureAwait(false)) return;
 
                     lock (_gate)
                     {
@@ -1028,6 +1377,21 @@ namespace Hv86.Vm
             {
                 try
                 {
+                    // реплику гасим всегда, даже если основная уже мертва
+                    VmProcess replica;
+                    lock (_gate)
+                    {
+                        replica = runtime.Replica;
+                        runtime.Replica = null;
+                        runtime.ReplicaState = "";
+                    }
+
+                    if (replica != null)
+                    {
+                        replica.Kill();
+                        replica.Dispose();
+                    }
+
                     if (runtime.Proc == null || runtime.Proc.HasExited) continue;
 
                     // при остановке службы диски сохраняем: это не аварийная ситуация

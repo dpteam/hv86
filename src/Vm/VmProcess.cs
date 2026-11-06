@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
@@ -26,6 +27,8 @@ namespace Hv86.Vm
         private static JobObject _job;
 
         public string VmId { get; private set; }
+        public string PipeName { get; private set; }
+        public bool IsReplica { get; private set; }
         public Process Process { get; private set; }
         public PipeClient Client { get; private set; }
         public DateTime LastBeatUtc = DateTime.UtcNow;
@@ -49,13 +52,14 @@ namespace Hv86.Vm
         // --------------------------------------------------------------- запуск
 
         public static async Task<VmProcess> LaunchAsync(VmDefinition vm, bool showConsole, string restorePath,
-            Action<string, Dictionary<string, object>> onEvent)
+            Action<string, Dictionary<string, object>> onEvent, bool replica = false, int relayPort = 0)
         {
             if (vm == null) throw new Hv86Exception("ВМ не найдена");
 
+            string pipeName = replica ? PipeNames.VmReplica(vm.Id) : PipeNames.VmHost(vm.Id);
+
             Process process;
             string arguments;
-            string workingDir;
 
             if (vm.IsHeadless)
             {
@@ -63,7 +67,6 @@ namespace Hv86.Vm
                     Log.Info("VMHOST", "headless-движок: окно консоли создаёт интерфейс, не процесс ВМ");
 
                 process = StartHeadless(vm, restorePath, out arguments);
-                workingDir = Paths.EngineDir;
             }
             else
             {
@@ -72,24 +75,35 @@ namespace Hv86.Vm
                 if (!string.IsNullOrEmpty(restorePath))
                     arguments += " --restore \"" + restorePath + "\"";
 
+                if (replica)
+                {
+                    arguments += " --replica";
+
+                    // порт релея основной ВМ: после повышения реплика займёт
+                    // именно его, чтобы адрес в state остался рабочим
+                    if (relayPort > 0)
+                        arguments += " --relay-port " + relayPort.ToString(CultureInfo.InvariantCulture);
+                }
+
                 string error;
                 process = SessionLauncher.Start(SelfHost.FileName, arguments, out error);
 
                 if (process == null)
                     throw new Hv86Exception("не удалось запустить процесс ВМ: " + error);
-
-                workingDir = "";
             }
 
-            Log.Info("VMHOST", "запуск (" + vm.Engine + "): " + arguments + " (" + SessionLauncher.Describe() + ")");
+            Log.Info("VMHOST", "запуск (" + vm.Engine + (replica ? ", реплика" : "") + "): " + arguments +
+                               " (" + SessionLauncher.Describe() + ")");
 
             VmProcess host = new VmProcess();
             host.VmId = vm.Id;
+            host.PipeName = pipeName;
+            host.IsReplica = replica;
             host.Process = process;
 
             SharedJob.Assign(process);
 
-            await host.ConnectAsync(onEvent).ConfigureAwait(false);
+            await host.ConnectAsync(onEvent, pipeName).ConfigureAwait(false);
             return host;
         }
 
@@ -186,9 +200,9 @@ namespace Hv86.Vm
 
         // ------------------------------------------------------------ канал
 
-        private async Task ConnectAsync(Action<string, Dictionary<string, object>> onEvent)
+        private async Task ConnectAsync(Action<string, Dictionary<string, object>> onEvent, string pipeName)
         {
-            PipeClient client = new PipeClient(PipeNames.VmHost(VmId));
+            PipeClient client = new PipeClient(pipeName);
             Client = client;
 
             client.EventReceived += delegate (string name, Dictionary<string, object> data)

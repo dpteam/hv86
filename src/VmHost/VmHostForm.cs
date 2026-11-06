@@ -25,6 +25,7 @@ namespace Hv86.VmHost
     {
         private readonly WebView2 _web;
         private readonly string _vmId;
+        private readonly bool _replica;
         private bool _reallyClosing;
         private bool _offScreen = true;
 
@@ -33,9 +34,10 @@ namespace Hv86.VmHost
 
         public VmResourceServer ResourceServer { get; private set; }
 
-        public VmHostForm(string vmId, string title)
+        public VmHostForm(string vmId, string title, bool replica = false)
         {
             _vmId = vmId;
+            _replica = replica;
 
             Text = "hv86 — " + title;
             BackColor = Color.FromArgb(0x05, 0x07, 0x0B);
@@ -61,7 +63,10 @@ namespace Hv86.VmHost
         {
             try
             {
-                string userData = Path.Combine(Paths.WebViewDataDir, "vm-" + _vmId);
+                // у реплики своя папка профиля: два процесса не могут делить
+                // один user data folder у WebView2
+                string userData = Path.Combine(Paths.WebViewDataDir,
+                    "vm-" + _vmId + (_replica ? "-replica" : ""));
                 Directory.CreateDirectory(userData);
 
                 CoreWebView2Environment environment =

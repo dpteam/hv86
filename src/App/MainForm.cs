@@ -305,10 +305,11 @@ namespace Hv86.App
                 string engine = Json.GetString(view, "engine", "web");
                 string name = Json.GetString(view, "name", id);
                 string state = Json.GetString(view, "state", "");
+                string pipe = Json.GetString(view, "pipe", "");
 
                 if (engine == "headless")
                 {
-                    OpenHeadlessConsole(id, name);
+                    OpenHeadlessConsole(id, name, pipe);
 
                     if (state == "stopped" || state == "failed")
                         await CallService("vm.start", Json.Obj("id", id), 180000);
@@ -576,11 +577,11 @@ namespace Hv86.App
 
         // ------------------------------------------------------------- helpers
 
-        private void OpenHeadlessConsole(string id, string name)
+        private void OpenHeadlessConsole(string id, string name, string pipeName)
         {
             if (InvokeRequired)
             {
-                BeginInvoke(new Action<string, string>(OpenHeadlessConsole), id, name);
+                BeginInvoke(new Action<string, string, string>(OpenHeadlessConsole), id, name, pipeName);
                 return;
             }
 
@@ -593,7 +594,7 @@ namespace Hv86.App
                 return;
             }
 
-            window = new HeadlessConsoleWindow(id, name);
+            window = new HeadlessConsoleWindow(id, name, pipeName);
             window.FormClosed += delegate { _headlessWindows.Remove(id); };
 
             _headlessWindows[id] = window;

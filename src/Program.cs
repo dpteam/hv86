@@ -63,14 +63,20 @@ namespace Hv86
                     return 2;
                 }
 
-                Log.Role = "vm-" + id;
-                Log.MinLevel = LogLevel.Info;
-                Log.Info("VMHOST", AppInfo.Summary() + " для " + id);
-
                 bool showConsole = HasFlag(args, "--console");
                 string restore = NextTo(args, "--restore", null);
+                bool replica = HasFlag(args, "--replica");
 
-                return new VmHostRunner(id, showConsole, restore, false).Run();
+                // у реплики свой файл лога: два процесса не делят один
+                Log.Role = "vm-" + id + (replica ? "-replica" : "");
+                Log.MinLevel = LogLevel.Info;
+                Log.Info("VMHOST", AppInfo.Summary() + " для " + id + (replica ? " (реплика)" : ""));
+
+                int relayPort = 0;
+                string relayText = NextTo(args, "--relay-port", null);
+                if (!string.IsNullOrEmpty(relayText)) int.TryParse(relayText, out relayPort);
+
+                return new VmHostRunner(id, showConsole, restore, false, replica, relayPort).Run();
             }
 
             // ------------------------------------------------------------ smoke

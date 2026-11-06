@@ -72,6 +72,19 @@
         return s + "s";
     }
 
+    // Режим отказоустойчивости в одну строку: "replica 3s · warm"
+    // (у реплики важно видеть, прогрета ли она - от этого зависит повышение)
+    function ftLabel(vm) {
+        var mode = vm.ft_mode || "off";
+        if (mode === "off") return "off";
+
+        var text = mode + " " + Math.round((vm.interval_ms || 0) / 1000) + "s";
+
+        if (mode === "replica" && vm.replica) text += " · " + vm.replica;
+
+        return text;
+    }
+
     function fmtSize(bytes) {
         var b = Number(bytes) || 0;
         if (b <= 0) return "—";
@@ -223,7 +236,7 @@
                 '<td class="mono">' + esc(media.join(" · ") || "—") + '</td>' +
                 '<td class="mono">' + (vm.mips ? esc(vm.mips) : "—") + '</td>' +
                 '<td class="mono">' + (vm.state === "running" || vm.state === "paused" ? fmtUptime(vm.uptime_sec) : "—") + '</td>' +
-                '<td class="mono">' + esc(vm.ft_mode === "checkpoint" ? "checkpoint " + Math.round((vm.interval_ms || 0) / 1000) + "s" : (vm.ft_mode || "off")) + '</td>' +
+                '<td class="mono">' + esc(ftLabel(vm)) + '</td>' +
                 '<td class="mono">' + esc(vm.restarts || 0) + '</td>';
 
             body.appendChild(tr);
@@ -372,7 +385,7 @@
         byId("setEgressMode").value = vm.egress_mode === "safe" ? "safe" : (vm.egress_mode === "allowlist" ? "allowlist" : "any");
         byId("setEgressAllow").value = (vm.egress_allow || []).join("\n");
 
-        byId("setFtMode").value = vm.ft_mode === "checkpoint" ? "checkpoint" : "off";
+        byId("setFtMode").value = vm.ft_mode === "checkpoint" ? "checkpoint" : (vm.ft_mode === "replica" ? "replica" : "off");
         byId("setInterval").value = Math.max(2, Math.round((vm.interval_ms || 15000) / 1000));
         byId("setKeep").value = vm.ft_keep || 3;
         byId("setRestart").value = vm.restart || "on-failure";

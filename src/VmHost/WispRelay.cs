@@ -77,11 +77,22 @@ namespace Hv86.VmHost
 
         public bool Start(out string error)
         {
+            return Start(0, out error);
+        }
+
+        /// <summary>
+        /// Поднять релей на конкретном порту. Нужно повышению реплики: она
+        /// стартует молча, а после падения основной обязана занять её порт,
+        /// иначе сохранённый в state адрес relay_url указывает в никуда.
+        /// port = 0 - любой свободный.
+        /// </summary>
+        public bool Start(int port, out string error)
+        {
             error = null;
 
             try
             {
-                TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
+                TcpListener listener = new TcpListener(IPAddress.Loopback, port);
                 listener.Start();
 
                 Port = ((IPEndPoint)listener.LocalEndpoint).Port;

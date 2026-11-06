@@ -162,6 +162,12 @@
 
         emu.add_listener("emulator-ready", function () {
             post({ action: "log", text: "emulator ready" });
+
+            if (config && config.paused) {
+                setState("paused", "replica ready");
+                return;
+            }
+
             try { emu.run(); } catch (e) { post({ action: "error", message: String(e) }); }
         });
 
@@ -177,8 +183,10 @@
         });
 
         // страховка: если ready не пришёл (например, образ грузится долго),
-        // всё равно пытаемся запустить через 4 секунды
+        // всё равно пытаемся запустить через 4 секунды. Реплику не трогаем:
+        // она обязана стоять на паузе до повышения.
         setTimeout(function () {
+            if (config && config.paused) return;
             if (emu && !emu.is_running()) {
                 try { emu.run(); } catch (e) { /* ниже будет metrics с нулями */ }
             }
@@ -275,6 +283,32 @@
             post({ action: "screenshot", data: canvas.toDataURL("image/png") });
         } catch (e) {
             post({ action: "error", message: String(e && e.message || e) });
+        }
+    }
+
+    // ------------------------------------------------------------ восстановление
+
+    async function restoreState(message) {
+        try {
+            await emu.stop();
+
+            setState("restoring", "restoring state");
+
+            const response = await fetch(message.url, { cache: "no-store" });
+            if (!response.ok) throw new Error("HTTP " + response.status);
+
+            const buffer = await response.arrayBuffer();
+            await emu.restore_state(buffer);
+
+            lastInstructions = emu.get_instruction_counter();
+            lastTime = 0;
+
+            setState("paused", "state restored");
+            post({ action: "restoreDone", ok: true, size: buffer.byteLength });
+        } catch (e) {
+            post({ action: "restoreDone", ok: false, error: String(e && e.message || e) });
+            post({ action: "error", message: "restore: " + (e && e.message || e) });
+            post({ action: "state", state: "failed" });
         }
     }
 
@@ -439,6 +473,10 @@
 
             case "tcpClose":
                 tcpClose(message);
+                break;
+
+            case "restore":
+                restoreState(message);
                 break;
 
             case "xhrTest":

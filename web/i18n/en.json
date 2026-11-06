@@ -88,6 +88,7 @@
   "set.netHint": "Applies after restart. NAT: guest reaches HTTP(S) and host ports can be forwarded into it. Relay: any TCP outbound.",
   "set.netRelayNote": "In relay mode inbound port forwarding is unavailable: only the NAT stack of the fetch backend can connect into the guest.",
   "set.ftMode": "Mode",
+  "set.ftHint": "replica keeps a second paused process in sync with the latest checkpoint and promotes it after a crash. Web engine only; headless falls back to checkpoints.",
   "set.interval": "Checkpoint interval, s",
   "set.keep": "Keep checkpoints",
   "set.restart": "Restart policy",
