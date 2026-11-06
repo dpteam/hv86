@@ -105,6 +105,10 @@ namespace Hv86.App
                 case "vm.reset":
                     return await _manager.ResetAsync(id).ConfigureAwait(false);
 
+                case "vm.keys":
+                    return await _manager.KeysAsync(id, Json.GetString(parameters, "text", ""),
+                        Json.GetBool(parameters, "enter", false)).ConfigureAwait(false);
+
                 case "vm.console":
                     return await _manager.ConsoleAsync(id).ConfigureAwait(false);
 

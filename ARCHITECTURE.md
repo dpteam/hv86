@@ -229,10 +229,36 @@ snapshots/0001-Initial/
 - Клиенты: окно менеджера, `hv86 --cli` (консоль/скрипты) — оба ходят одним и тем же путём,
   поэтому состояние всегда одно и «кто прав» не бывает.
 - Методы: `vm.list/create/start/stop/pause/resume/reset/delete`, `vm.snapshot.*`,
-  `vm.media.mount/eject`, `vm.console.attach`, `host.stats`, `log.tail`, `service.status`.
+  `vm.media.mount/eject`, `vm.console.attach`, `vm.keys`, `host.stats`, `log.tail`,
+  `service.status`.
 - Push-события: `vm.state`, `vm.metrics`, `vm.log`, `ft.event`, `checkpoint.created`.
 - Консоль: UI-окно получает кадры/отдаёт ввод через тот же pipe (для HeadlessEngine),
   либо WebView2 самой ВМ (для WebEngine) — интерфейс одинаковый для UI.
+
+### Ввод в гостя и буфер обмена
+
+Текст попадает в гостя только **нажатиями**: v86 раскладывает символы в скан-коды
+(`keyboard_send_text`, раскладка US). Это единственный путь, который понимают любые
+гости — от DOS до Linux tty; «вписать в память» нельзя.
+
+```
+CLI / UI ── vm.keys {id, text, enter} ──► VmManager ── vm.key {text} ──► vmhost
+                                                                         ├ web: страница → keyboard_send_text
+                                                                         └ headless: сам Node → keyboard_send_text
+```
+
+- `\n` в тексте = Enter. Пауза между символами 5–6 мс: без неё гость теряет клавиши
+  (проверено на FreeDOS — символы просто пропадают).
+- **Буфер обмена хоста**: в web-консоли `Ctrl+V` (и кнопка) — процесс ВМ читает
+  системный буфер и отдаёт текст странице. У страницы доступа к буферу нет, а
+  запрос разрешения у WebView2 выглядел бы странно.
+- Только ASCII: раскладка в v86 — US, кириллица не наберётся (и это честно видно
+  в логе, а не «молча ничего»).
+- headless: тот же `keyboard_send_text`, поэтому в Node включён клавиатурный адаптер
+  v86 (`disable_keyboard: false`) — с `disable_keyboard: true` метод падает на
+  `undefined.simulate_char`.
+- Статус: `vm.keys` возвращает число символов **после** подтверждения страницы,
+  чтобы «введено» не было враньём.
 
 ## 6. Пути и данные
 

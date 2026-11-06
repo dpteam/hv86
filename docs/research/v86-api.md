@@ -51,6 +51,33 @@ const emu = new V86({  // раньше назывался V86Starter
 | `screen_set_scale(sx, sy)`, `screen_go_fullscreen()`, `lock_mouse()` | UX консоли |
 | `create_file/read_file` (9p) | обмен файлами с гостем |
 
+### Клавиатура: три разных метода
+
+| метод | что делает | нужен адаптер |
+|---|---|---|
+| `keyboard_send_scancodes([...], delay)` | сырые PS/2-сканкоды в шину (`bus.send("keyboard-code")`) | **нет** |
+| `keyboard_send_keys([13], delay)` | «нажать клавишу» по *keyCode* (Enter = 13) | да |
+| `keyboard_send_text(str, delay)` | текст → скан-коды по US-раскладке | да |
+
+`keyboard_send_text/keys` дергают `keyboard_adapter`, поэтому при
+`disable_keyboard: true` падают с `Cannot read properties of undefined
+(reading 'simulate_char')` — проверено на Node. Сам адаптер DOM не требует
+(DOM-часть под `typeof window`), так что в Node его можно включать.
+
+`delay` — пауза **на символ** (мс). Без неё гость теряет нажатия: FreeDOS
+при `keyboard_send_text("echo ...")` без задержки пропускает символы.
+`\n` в тексте сам по себе Enter не нажимает — Enter отправляется
+`keyboard_send_keys([13])`.
+
+### Звук
+
+- `disable_speaker: false` создаёт `AudioContext` + mixer + pc-speaker + DAC (SB16).
+- Устройство `sb16` создаётся **всегда** (`devices.sb16 = new D(...)`), не по опции,
+  и сериализуется в `save_state()` — то есть звук переживает снапшот.
+- В Node звука нет (`window.AudioContext` отсутствует), поэтому там `disable_speaker: true`.
+- Громкость/мьют снаружи не выведены: пришлось бы лезть в `speaker_adapter.audio_context`,
+  а это внутренности v86.
+
 ## События (шина)
 
 `emulator-ready`, `emulator-started`, `emulator-stopped`, `screen-set-size [w,h,bpp]`,

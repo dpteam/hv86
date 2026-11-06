@@ -23,6 +23,9 @@ namespace Hv86.Vm
         private readonly Dictionary<string, VmRuntime> _vms =
             new Dictionary<string, VmRuntime>(StringComparer.Ordinal);
 
+        /// <summary>Предел ввода за один вызов: больше - это уже не текст.</summary>
+        private const int MaxKeys = 4096;
+
         private readonly DateTime _startedUtc = DateTime.UtcNow;
         private bool _disposed;
 
@@ -499,6 +502,40 @@ namespace Hv86.Vm
             VmStore.Save(runtime.Def);
             EmitState(runtime);
             return runtime.Def.ToView();
+        }
+
+        /// <summary>
+        /// Ввод в гостя: текст превращается в настоящие нажатия (v86 сам
+        /// раскладывает символы в скан-коды). "\n" = Enter.
+        /// Живёт в службе, потому что нужен и консоли (вставка), и скриптам
+        /// (`hv86 --cli type`), и тестам.
+        /// </summary>
+        public async Task<object> KeysAsync(string id, string text, bool enter)
+        {
+            VmRuntime runtime = Get(id);
+
+            if (runtime.Proc == null || runtime.Proc.HasExited)
+                throw new Hv86Exception("ВМ не запущена: вводить некуда");
+
+            string payload = text ?? "";
+            if (enter) payload += "\n";
+
+            payload = payload.Replace("\r\n", "\n").Replace('\r', '\n');
+
+            if (payload.Length == 0) throw new Hv86Exception("пустой ввод");
+
+            if (payload.Length > MaxKeys)
+                throw new Hv86Exception("слишком длинный ввод: " + payload.Length +
+                                        " символов, максимум " + MaxKeys);
+
+            object response = await runtime.Proc.Client
+                .CallForResultAsync("vm.key", Json.Obj("text", payload), 60000).ConfigureAwait(false);
+
+            if (response == null) throw new Hv86Exception("движок не ответил на ввод");
+
+            Log.Info("VM", "введено " + payload.Length + " символов в " + id);
+
+            return Json.Obj("id", id, "chars", payload.Length);
         }
 
         public async Task<object> ConsoleAsync(string id)

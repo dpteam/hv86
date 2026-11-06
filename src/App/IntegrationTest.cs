@@ -126,6 +126,25 @@ namespace Hv86.App
                 else
                     Fail("9p modules did not load in the console page");
 
+                // ввод в гостя в web-движке: служба просит страницу набрать
+                // текст, страница превращает его в скан-коды и подтверждает
+                Dictionary<string, object> typed = null;
+
+                using (PipeClient vmPipe = new PipeClient(PipeNames.VmHost(id)))
+                {
+                    if (!vmPipe.ConnectAsync(5000).GetAwaiter().GetResult())
+                        Fail("cannot connect to the vm pipe for the typing probe");
+                    else
+                        typed = vmPipe.CallForResultAsync("vm.key",
+                                Json.Obj("text", "echo hv86web\n"), 90000).GetAwaiter().GetResult()
+                            as Dictionary<string, object>;
+                }
+
+                if (typed != null && Json.GetBool(typed, "ok", false) && Json.GetInt(typed, "chars", 0) > 0)
+                    Ok("web keyboard input", "page typed " + Json.GetInt(typed, "chars", 0) + " chars into the guest");
+                else
+                    Fail("web keyboard input failed: " + Json.Stringify(typed));
+
                 string forwardResult = ProbeForward("127.0.0.1", forwardPort, 45000);
                 Ok("port forward", forwardResult);
 

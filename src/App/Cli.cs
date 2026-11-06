@@ -124,6 +124,10 @@ namespace Hv86.App
                 case "revert":
                     return Revert(client, positional, json);
 
+                case "type":
+                case "paste":
+                    return TypeText(client, positional, options, json);
+
                 case "create":
                     return Create(client, options, json);
 
@@ -308,6 +312,43 @@ namespace Hv86.App
             if (json) Console.WriteLine(Json.Pretty(view));
             else Console.WriteLine("ВМ " + Json.GetString(view, "name", id) + " " + doneText +
                                    " (" + Json.GetString(view, "state", "") + ")");
+
+            return 0;
+        }
+
+        /// <summary>
+        /// `type`/`paste`: отправить текст в гостя нажатиями. Текст собирается
+        /// из всех оставшихся аргументов, поэтому пробелы не надо экранировать.
+        /// </summary>
+        private static int TypeText(PipeClient client, List<string> positional,
+            Dictionary<string, string> options, bool json)
+        {
+            string id = ResolveId(client, Positional(positional, 1));
+
+            StringBuilder text = new StringBuilder();
+
+            for (int i = 2; i < positional.Count; i++)
+            {
+                if (text.Length > 0) text.Append(' ');
+                text.Append(positional[i]);
+            }
+
+            bool enter = options.ContainsKey("enter");
+
+            if (text.Length == 0 && !enter)
+            {
+                Console.Error.WriteLine("Нечего вводить: hv86 --cli type <vm> \"текст\" [--enter]");
+                return 2;
+            }
+
+            Dictionary<string, object> result = Result(client, "vm.keys",
+                Json.Obj("id", id, "text", text.ToString(), "enter", enter), 120000)
+                as Dictionary<string, object>;
+
+            if (json) Console.WriteLine(Json.Pretty(result));
+            else
+                Console.WriteLine("введено " + Json.GetInt(result, "chars", 0) + " символов (" +
+                                  (enter ? "с Enter" : "без Enter") + ")");
 
             return 0;
         }
@@ -608,6 +649,7 @@ namespace Hv86.App
             Console.WriteLine("  hv86 --cli snapshot <vm> [имя]       снять снапшот");
             Console.WriteLine("  hv86 --cli snapshots <vm>            список снапшотов");
             Console.WriteLine("  hv86 --cli revert <vm> <снапшот>     откатить");
+            Console.WriteLine("  hv86 --cli type <vm> \"текст\" [--enter]   набрать в госте");
             Console.WriteLine("  hv86 --cli create --name <имя> --preset <id> [--memory МБ] [--disk МБ] [--net relay] [--engine headless] [--share C:\\dir]");
             Console.WriteLine("  hv86 --cli create --name <имя> --iso <файл>");
             Console.WriteLine("  hv86 --cli export <vm> [файл.hv86x]");

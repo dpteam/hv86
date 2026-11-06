@@ -24,6 +24,9 @@ const STREAM_PREFIX = "\\\\.\\pipe\\hv86-vm-";
 const SCREEN_POLL_MS = 120;
 const METRICS_MS = 1000;
 
+// пауза между символами при вводе текста: с ней гость не теряет клавиши
+const KEY_DELAY_MS = 5;
+
 // ------------------------------------------------------------------ аргументы
 
 function parseArgs(argv) {
@@ -91,7 +94,10 @@ function buildOptions(cfg) {
         screen: { ansi: true },
         autostart: false,
         disable_speaker: true,
-        disable_keyboard: true,
+        // клавиатура нужна: без неё не работают keyboard_send_text/keys, а через
+        // них идёт и вставка из буфера, и `hv86 --cli type`. DOM-часть адаптера
+        // в Node не включается (она под typeof window), так что это безопасно.
+        disable_keyboard: false,
         disable_mouse: true,
         fastboot: true
     };
@@ -346,9 +352,24 @@ function keyInput(params) {
         return;
     }
 
-    if (typeof params.text === "string" && params.text.length) {
-        emulator.keyboard_send_text(params.text);
+    if (typeof params.text !== "string" || !params.text.length) return;
+
+    // Текст вводим настоящими нажатиями, с паузой: гость не успевает
+    // разобрать пачку скан-кодов и теряет символы. "\n" - это Enter,
+    // потому что другого способа нажать Enter у нас нет.
+    const lines = params.text.split("\n");
+
+    let chain = Promise.resolve();
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+
+        chain = chain
+            .then(() => (i > 0 ? emulator.keyboard_send_keys([13], 0) : null))
+            .then(() => (line.length ? emulator.keyboard_send_text(line, KEY_DELAY_MS) : null));
     }
+
+    return chain;
 }
 
 async function handle(method, params) {
@@ -388,8 +409,8 @@ async function handle(method, params) {
             return { ok: true };
 
         case "vm.key":
-            keyInput(params || {});
-            return { ok: true };
+            await keyInput(params || {});
+            return { ok: true, chars: (params && params.text ? params.text.length : 0) };
 
         case "vm.screen": {
             const rows = readScreen() || [];

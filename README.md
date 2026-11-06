@@ -41,6 +41,8 @@
 - **Горячая реплика** (`ft.mode=replica`, web-движок): рядом стоит второй процесс
   с последним чекпоинтом; при падении основной он повышается за секунды и ВМ
   продолжает работу, а не загружается заново.
+- **Ввод в гостя**: `hv86 --cli type <vm> "dir" --enter` и `vm.keys` в API; в web-консоли
+  `Ctrl+V` вставляет текст из буфера обмена хоста (раскладка US).
 - **Диски**: raw-образы (sparse), изменения гостя сохраняются на диск при штатной
   остановке; при падении образ остаётся целым, ВМ откатывается к чекпоинту.
 - **Пресеты**: FreeDOS, KolibriOS, Oberon, TinyCore, Linux — скачивание с проверкой SHA-256.
@@ -77,6 +79,7 @@ hv86 --cli start dev
 hv86 --cli snapshot dev before-update
 hv86 --cli snapshots dev
 hv86 --cli revert dev 0001-before-update
+hv86 --cli type dev "dir" --enter
 hv86 --cli stop dev
 hv86 --cli export dev D:\backup\dev.hv86x
 hv86 --cli import D:\backup\dev.hv86x

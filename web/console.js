@@ -286,6 +286,31 @@
         }
     }
 
+    // --------------------------------------------------------------- ввод
+
+    // Текст в гость: v86 отправляет настоящие нажатия с паузой (без неё
+    // гость теряет символы). "\n" - это Enter.
+    async function typeText(message) {
+        if (!emu || !message.text) {
+            post({ action: "typed", ok: false, error: "эмулятор не создан" });
+            return;
+        }
+
+        var lines = String(message.text).split("\n");
+
+        try {
+            for (var i = 0; i < lines.length; i++) {
+                if (i > 0) await emu.keyboard_send_keys([13], 0);
+                if (lines[i].length) await emu.keyboard_send_text(lines[i], 6);
+            }
+
+            post({ action: "typed", ok: true, chars: message.text.length });
+        } catch (e) {
+            post({ action: "typed", ok: false, error: String(e && e.message || e) });
+            post({ action: "error", message: "type: " + (e && e.message || e) });
+        }
+    }
+
     // ------------------------------------------------------------ восстановление
 
     async function restoreState(message) {
@@ -416,6 +441,10 @@
                 case "screenshot":
                     screenshot();
                     break;
+
+                case "paste":
+                    post({ action: "paste" });
+                    break;
             }
         } catch (e) {
             post({ action: "error", message: String(e && e.message || e) });
@@ -461,6 +490,10 @@
 
             case "destroy":
                 destroy();
+                break;
+
+            case "type":
+                typeText(message);
                 break;
 
             case "tcpConnect":
@@ -524,6 +557,18 @@
     });
 
     // ------------------------------------------------------- кнопки и старт
+
+    // Ctrl+V - это вставка из буфера хоста, а не Ctrl+V гостя. v86 ловит
+    // клавиши на document, поэтому перехватываем раньше него (capture).
+    window.addEventListener("keydown", function (e) {
+        if (!e.ctrlKey || e.altKey || e.shiftKey) return;
+        if (e.code !== "KeyV" && e.keyCode !== 86) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        post({ action: "paste" });
+    }, true);
 
     var buttons = document.querySelectorAll(".cbtn");
     for (var i = 0; i < buttons.length; i++) {

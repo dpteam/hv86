@@ -151,6 +151,35 @@ namespace Hv86.App
                     Console.WriteLine("------------------");
                 }
 
+                // ---- ввод в гостя: служба печатает команду, гость её исполняет.
+                // Единственная сквозная проверка keyboard_send_text: если текст
+                // не дойдёт, на экране не будет результата команды.
+                string prompt = WaitScreenMatch(id, IsDosPrompt, 90000);
+
+                if (prompt == null)
+                {
+                    Fail("no DOS prompt on the VGA screen: cannot type into the guest");
+                    Console.WriteLine("----- screen -----");
+                    Console.WriteLine(WaitScreen(id, 1000));
+                    Console.WriteLine("------------------");
+                }
+                else
+                {
+                    Call(client, "vm.keys", Json.Obj("id", id,
+                        "text", "echo hv86kbd", "enter", true), 60000);
+
+                    string typed = WaitScreenMatch(id, HasLine("hv86kbd"), 60000);
+
+                    if (typed != null) Ok("keyboard input", "guest executed the typed command");
+                    else
+                    {
+                        Fail("guest did not execute the typed text");
+                        Console.WriteLine("----- screen -----");
+                        Console.WriteLine(WaitScreen(id, 1000));
+                        Console.WriteLine("------------------");
+                    }
+                }
+
                 Dictionary<string, object> snapshot = Call(client, "vm.snapshot",
                     Json.Obj("id", id, "name", "headless-first"), 300000);
 
@@ -255,6 +284,93 @@ namespace Hv86.App
             }
 
             return latest;
+        }
+
+        /// <summary>Ждёт, пока на VGA-экране не появится экран, подходящий под условие.</summary>
+        private static string WaitScreenMatch(string vmId, Func<string, bool> predicate, int timeoutMs)
+        {
+            string latest = "";
+
+            using (PipeClient vm = new PipeClient(PipeNames.VmHost(vmId)))
+            {
+                if (!vm.ConnectAsync(8000).GetAwaiter().GetResult())
+                    throw new Hv86Exception("cannot connect to the vm pipe");
+
+                vm.EventReceived += delegate (string name, Dictionary<string, object> data)
+                {
+                    if (name != "vm.screen") return;
+
+                    List<object> lines = Json.GetList(data, "lines");
+                    if (lines == null) return;
+
+                    StringBuilder text = new StringBuilder();
+                    foreach (object line in lines) text.AppendLine(line as string ?? "");
+                    latest = text.ToString();
+                };
+
+                DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+                while (DateTime.UtcNow < deadline)
+                {
+                    if (predicate(latest)) return latest;
+                    Thread.Sleep(200);
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Гость дошёл до приглашения DOS: "A:\&gt;", "C:\&gt;" и т.п.</summary>
+        private static bool IsDosPrompt(string screen)
+        {
+            if (string.IsNullOrEmpty(screen)) return false;
+
+            foreach (string line in screen.Split('\n'))
+            {
+                string clean = StripAnsi(line);
+
+                if (clean.IndexOf(":\\>", StringComparison.Ordinal) >= 0) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>На экране есть строка, равная маркеру (результат команды гостя).</summary>
+        private static Func<string, bool> HasLine(string marker)
+        {
+            return delegate (string screen)
+            {
+                if (string.IsNullOrEmpty(screen)) return false;
+
+                foreach (string line in screen.Split('\n'))
+                    if (StripAnsi(line).Trim() == marker) return true;
+
+                return false;
+            };
+        }
+
+        /// <summary>Убирает ANSI-последовательности: в headless экран приходит с цветами.</summary>
+        private static string StripAnsi(string line)
+        {
+            if (string.IsNullOrEmpty(line) || line.IndexOf('\u001b') < 0) return line ?? "";
+
+            StringBuilder clean = new StringBuilder();
+
+            for (int i = 0; i < line.Length; i++)
+            {
+                if (line[i] != '\u001b')
+                {
+                    clean.Append(line[i]);
+                    continue;
+                }
+
+                int end = line.IndexOf('m', i);
+                if (end < 0) break;
+
+                i = end;
+            }
+
+            return clean.ToString();
         }
 
         private static string FirstMeaningfulLine(string screen)

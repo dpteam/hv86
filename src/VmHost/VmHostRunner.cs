@@ -25,6 +25,9 @@ namespace Hv86.VmHost
     {
         private const int StateChunkSize = 512 * 1024;
 
+        /// <summary>Сколько символов вставки принимаем: больше - это уже не текст, а файл.</summary>
+        private const int MaxPasteChars = 4096;
+
         private readonly string _vmId;
         private readonly bool _showConsole;
         private readonly string _restorePath;
@@ -54,6 +57,7 @@ namespace Hv86.VmHost
         private Dictionary<string, object> _bootConfig;
         private TaskCompletionSource<Dictionary<string, object>> _xhrProbe;
         private TaskCompletionSource<bool> _restoreWait;
+        private TaskCompletionSource<bool> _typeWait;
         private bool _promoted;
 
         private sealed class PendingSave
@@ -278,6 +282,18 @@ namespace Hv86.VmHost
                     _restoreWait?.TrySetResult(Json.GetBool(message, "ok", false));
                     if (!Json.GetBool(message, "ok", false))
                         _error = Json.GetString(message, "error", "restore failed");
+                    break;
+
+                // Ctrl+V в консоли: страница не имеет доступа к буферу обмена
+                // хоста, поэтому текст читает процесс ВМ (он в сессии пользователя)
+                case "paste":
+                    PasteFromHost();
+                    break;
+
+                case "typed":
+                    _typeWait?.TrySetResult(Json.GetBool(message, "ok", true));
+                    if (!Json.GetBool(message, "ok", true))
+                        _error = Json.GetString(message, "error", "typing failed");
                     break;
             }
         }
@@ -694,6 +710,43 @@ namespace Hv86.VmHost
 
         // ------------------------------------------------------------- команды
 
+        /// <summary>
+        /// Ctrl+V в окне консоли: берём текст из буфера обмена хоста и отдаём
+        /// странице - она отправит его гостю нажатиями. Делает именно процесс
+        /// ВМ: он живёт в сессии пользователя, а у страницы доступа к системному
+        /// буферу нет (и запрос разрешения там выглядел бы странно).
+        /// </summary>
+        private void PasteFromHost()
+        {
+            string text;
+
+            try { text = Clipboard.GetText(); }
+            catch (Exception ex)
+            {
+                Log.Warn("CON", "буфер обмена недоступен: " + ex.Message);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(text))
+            {
+                Broadcast("vm.toast", Json.Obj("id", _vmId, "text", "Буфер обмена пуст", "kind", "info"));
+                return;
+            }
+
+            // в гость идёт текст, а не управляющие символы: CRLF -> LF (\n = Enter),
+            // табы тоже превращаем в пробелы - их скан-кода у нас нет
+            text = text.Replace("\r\n", "\n").Replace('\r', '\n').Replace('\t', ' ');
+
+            if (text.Length > MaxPasteChars)
+            {
+                text = text.Substring(0, MaxPasteChars);
+                Log.Warn("CON", "вставка обрезана до " + MaxPasteChars + " символов");
+            }
+
+            Log.Info("CON", "вставка из буфера: " + text.Length + " символов");
+            _form.Post(Json.Obj("action", "type", "text", text));
+        }
+
         private async Task<object> DispatchAsync(string method, Dictionary<string, object> parameters)
         {
             switch (method)
@@ -726,6 +779,32 @@ namespace Hv86.VmHost
                 case "vm.show":
                     _form.BeginInvoke(new Action(_form.ShowConsole));
                     return Json.Obj("shown", true);
+
+                // ввод в гостя настоящими нажатиями: страница умеет превращать
+                // текст в скан-коды, а служба - нет, поэтому команда идёт сюда.
+                // Ждём подтверждения страницы: иначе "введено" было бы враньём
+                case "vm.key":
+                {
+                    string text = Json.GetString(parameters, "text", "");
+
+                    if (string.IsNullOrEmpty(text)) throw new Hv86Exception("пустой ввод");
+
+                    TaskCompletionSource<bool> wait = new TaskCompletionSource<bool>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+
+                    _typeWait = wait;
+                    _form.Post(Json.Obj("action", "type", "text", text));
+
+                    Task finished = await Task.WhenAny(wait.Task, Task.Delay(120000)).ConfigureAwait(true);
+                    _typeWait = null;
+
+                    if (finished != wait.Task) throw new Hv86Exception("страница не подтвердила ввод за 120 с");
+                    if (!await wait.Task.ConfigureAwait(true)) throw new Hv86Exception("страница не смогла набрать текст");
+
+                    Log.Info("CON", "ввод: " + text.Length + " символов");
+
+                    return Json.Obj("ok", true, "chars", text.Length);
+                }
 
                 case "vm.hide":
                     _form.BeginInvoke(new Action(_form.HideConsole));
