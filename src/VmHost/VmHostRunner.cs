@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -27,6 +28,9 @@ namespace Hv86.VmHost
 
         /// <summary>Сколько символов вставки принимаем: больше - это уже не текст, а файл.</summary>
         private const int MaxPasteChars = 4096;
+
+        /// <summary>Сообщение из страницы, которое обрабатывалось дольше этого, попадает в лог.</summary>
+        private const long SlowMessageMs = 250;
 
         private readonly string _vmId;
         private readonly bool _showConsole;
@@ -221,6 +225,24 @@ namespace Hv86.VmHost
         {
             string action = Json.GetString(message, "action", "");
 
+            // Сообщения из страницы приходят в UI-поток: если обработчик
+            // задумался (например, пишет state на диск), окно встаёт. Пишем
+            // такие случаи в лог, чтобы не угадывать по симптомам.
+            Stopwatch watch = Stopwatch.StartNew();
+
+            try
+            {
+                HandlePageMessage(action, message);
+            }
+            finally
+            {
+                if (watch.ElapsedMilliseconds > SlowMessageMs)
+                    Log.Warn("CON", "медленное сообщение " + watch.ElapsedMilliseconds + " мс: " + action);
+            }
+        }
+
+        private void HandlePageMessage(string action, Dictionary<string, object> message)
+        {
             switch (action)
             {
                 case "ready":

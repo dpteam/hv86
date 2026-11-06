@@ -40,7 +40,8 @@ namespace Hv86.App
         private string _state = "connecting";
         private bool _closing;
 
-        public HeadlessConsoleWindow(string vmId, string name, string pipeName = null)
+        public HeadlessConsoleWindow(string vmId, string name, string pipeName = null,
+            string fontFamily = null, int fontSize = 0)
         {
             _vmId = vmId;
             _pipeName = string.IsNullOrEmpty(pipeName) ? PipeNames.VmHost(vmId) : pipeName;
@@ -55,6 +56,20 @@ namespace Hv86.App
 
             _screen = new ConsoleScreen { Dock = DockStyle.Fill };
             Controls.Add(_screen);
+
+            // шрифт текста: свой у ВМ, иначе хостовый (шрифт меняется только
+            // для отрисовки, гость про него не знает)
+            try
+            {
+                string family = string.IsNullOrEmpty(fontFamily) ? "Consolas" : fontFamily;
+                float px = fontSize > 0 ? fontSize : 13f;
+
+                _screen.Font = new Font(family, px, FontStyle.Regular, GraphicsUnit.Point);
+            }
+            catch
+            {
+                // шрифта нет в системе - остаётся Consolas по умолчанию
+            }
 
             Panel toolbar = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Color.FromArgb(0x0D, 0x12, 0x19) };
 

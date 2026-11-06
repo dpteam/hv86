@@ -391,7 +391,13 @@ namespace Hv86.App
                 // можно открыть и для выключенной, а старт - отдельной кнопкой
                 if (engine == "headless")
                 {
-                    OpenHeadlessConsole(id, name, pipe);
+                    string font = Json.GetString(view, "text_font", "");
+                    int fontSize = Json.GetInt(view, "text_font_size", 0);
+
+                    if (string.IsNullOrEmpty(font)) font = HostSettings.TextFont;
+                    if (fontSize <= 0) fontSize = HostSettings.TextFontSize;
+
+                    OpenHeadlessConsole(id, name, pipe, font, fontSize);
                 }
                 else
                 {
@@ -717,11 +723,13 @@ namespace Hv86.App
 
         // ------------------------------------------------------------- helpers
 
-        private void OpenHeadlessConsole(string id, string name, string pipeName)
+        private void OpenHeadlessConsole(string id, string name, string pipeName,
+            string fontFamily = null, int fontSize = 0)
         {
             if (InvokeRequired)
             {
-                BeginInvoke(new Action<string, string, string>(OpenHeadlessConsole), id, name, pipeName);
+                BeginInvoke(new Action<string, string, string, string, int>(OpenHeadlessConsole),
+                    id, name, pipeName, fontFamily, fontSize);
                 return;
             }
 
@@ -734,7 +742,7 @@ namespace Hv86.App
                 return;
             }
 
-            window = new HeadlessConsoleWindow(id, name, pipeName);
+            window = new HeadlessConsoleWindow(id, name, pipeName, fontFamily, fontSize);
             window.FormClosed += delegate { _headlessWindows.Remove(id); };
 
             _headlessWindows[id] = window;

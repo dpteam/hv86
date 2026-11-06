@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -38,6 +39,9 @@ namespace Hv86.VmHost
         private readonly CoreWebView2 _core;
         private readonly List<FileStream> _streams = new List<FileStream>();
 
+        /// <summary>Запрос, который обрабатывался дольше этого, попадает в лог.</summary>
+        private const long SlowRequestMs = 250;
+
         /// <summary>"hda"|"cdrom"|"fda" -> абсолютный путь (или null, если нет).</summary>
         public Func<string, string> MediaPath;
 
@@ -61,6 +65,24 @@ namespace Hv86.VmHost
         }
 
         private void OnRequest(object sender, CoreWebView2WebResourceRequestedEventArgs e)
+        {
+            // UI-поток vmhost: если обработчик задумался, окно перестаёт
+            // отвечать. Такие случаи должны быть видны в логе, а не угадываться.
+            Stopwatch watch = Stopwatch.StartNew();
+            string uri = e.Request == null ? "?" : (e.Request.Uri ?? "?");
+
+            try
+            {
+                HandleRequest(e);
+            }
+            finally
+            {
+                if (watch.ElapsedMilliseconds > SlowRequestMs)
+                    Log.Warn("RES", "медленный запрос " + watch.ElapsedMilliseconds + " мс: " + uri);
+            }
+        }
+
+        private void HandleRequest(CoreWebView2WebResourceRequestedEventArgs e)
         {
             try
             {
@@ -311,6 +333,25 @@ namespace Hv86.VmHost
             return BytesResponse(Encoding.UTF8.GetBytes(text ?? ""), status, reason, contentType);
         }
 
+        /// <summary>
+        /// Выкидывает из списка потоки, которые WebView2 уже закрыл: иначе
+        /// список растёт на каждый запрос образа и живёт до конца окна.
+        /// </summary>
+        private void PruneStreams()
+        {
+            for (int i = _streams.Count - 1; i >= 0; i--)
+            {
+                try
+                {
+                    if (_streams[i].SafeFileHandle.IsClosed) _streams.RemoveAt(i);
+                }
+                catch
+                {
+                    _streams.RemoveAt(i);
+                }
+            }
+        }
+
         private void ServeFile(CoreWebView2WebResourceRequestedEventArgs e, string path, string contentType)
         {
             long size;
@@ -334,7 +375,10 @@ namespace Hv86.VmHost
             if (string.IsNullOrEmpty(range))
             {
                 // Целиком: отдаём FileStream как есть, чтобы не тянуть 128 МБ
-                // state-файла в память. Потоки живут до закрытия окна.
+                // state-файла в память. Потоки закрывает WebView2, когда
+                // дочитает; мы лишь помним их, чтобы не собрать мусор.
+                lock (_streams) PruneStreams();
+
                 FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read,
                     FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.SequentialScan);
 
