@@ -133,6 +133,12 @@ jobs:
           $version = '${{ steps.version.outputs.version }}'
           $name = "hv86-$version-win-x64"
 
+          # архив без инструкции уже один раз выглядел как "ничего не работает"
+          if (-not (Test-Path 'publish\README.txt')) {
+              Write-Host '::error::publish\README.txt is missing (tools\release-readme.txt)'
+              exit 1
+          }
+
           $sevenZip = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
           if (Test-Path $sevenZip) {
               & $sevenZip a -tzip -mx=6 "$name.zip" '.\publish\*' | Out-Null

@@ -33,5 +33,12 @@ if "%CODE%"=="0" (
   )
 )
 
+rem README для распакованного архива: без него свежий exe выглядит
+rem как "кнопки не работают" (движка-то ещё нет)
+if exist "tools\release-readme.txt" (
+  copy /y "tools\release-readme.txt" "publish\README.txt" >nul
+  echo readme: publish\README.txt
+)
+
 popd
 exit /b %CODE%

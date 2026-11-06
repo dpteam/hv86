@@ -175,6 +175,14 @@
         var pill = byId("servicePill");
         var text = byId("serviceText");
 
+        // портативный режим - это не "служба сломана", а нормальный способ
+        // запуска без установки: так и пишем, иначе выглядит как ошибка
+        if (state.portable) {
+            pill.className = "pill ok";
+            text.textContent = T("svc.portable");
+            return;
+        }
+
         pill.className = "pill " + (service.running ? "ok" : service.installed ? "warn" : "bad");
 
         if (!service.installed) text.textContent = T("svc.notInstalled");
@@ -277,7 +285,20 @@
         var service = state.service || {};
         var host = state.host || {};
 
-        byId("statusService").textContent = "service: " + (service.state || "unknown");
+        byId("statusService").textContent = "service: " +
+            (state.portable ? "portable" : (service.state || "unknown"));
+
+        // если движка нет совсем - говорим об этом прямо, а не оставляем
+        // пустой экран с неработающими кнопками
+        var hint = byId("engineHint");
+
+        if (!state.host) {
+            hint.textContent = T("empty.noEngine");
+            hint.classList.remove("hidden");
+        } else {
+            hint.textContent = "";
+            hint.classList.add("hidden");
+        }
 
         byId("statusHost").textContent = host.product
             ? "host: " + host.product + " " + host.version + " · v86 " + host.v86 +
@@ -731,6 +752,7 @@
         switch (message.type) {
             case "state":
                 state.service = message.service || null;
+                state.portable = !!message.portable;
                 state.host = message.host || null;
                 state.vms = message.vms || [];
                 state.presets = message.presets || [];

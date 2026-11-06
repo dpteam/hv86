@@ -4,6 +4,7 @@
   "svc.notInstalled": "service not installed",
   "svc.running": "service running",
   "svc.stopped": "service stopped",
+  "svc.portable": "no service: engine inside the app",
 
   "btn.refresh": "Refresh",
   "btn.newVm": "New VM…",
@@ -27,6 +28,7 @@
 
   "empty.title": "No virtual machines yet",
   "empty.text": "Create one from a preset (FreeDOS, KolibriOS, TinyCore) or from your own ISO.",
+  "empty.noEngine": "The engine is not responding: neither a service nor the portable mode. Start hv86 as administrator (⋮ → Start service) if the service is installed.",
 
   "act.selected": "Selected",
   "act.connect": "Connect",

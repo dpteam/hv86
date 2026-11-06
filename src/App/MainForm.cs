@@ -33,6 +33,8 @@ namespace Hv86.App
             new Dictionary<string, HeadlessConsoleWindow>(StringComparer.Ordinal);
 
         private PipeClient _client;
+        private ServiceRunner _engine;          // портативный движок: службы нет - держим движок сами
+        private bool _engineTried;
         private bool _webReady;
         private bool _reallyClosing;
         private bool _trayHintShown;
@@ -80,6 +82,8 @@ namespace Hv86.App
                 _timer.Stop();
                 _timer.Dispose();
                 try { _client?.Dispose(); } catch { }
+                try { _engine?.Stop(); } catch { }
+                _engine = null;
                 try { _tray.Visible = false; _tray.Dispose(); } catch { }
                 try { _web.Dispose(); } catch { }
             };
@@ -446,6 +450,42 @@ namespace Hv86.App
 
         // ------------------------------------------------------------- service io
 
+        /// <summary>
+        /// Портативный режим: службы нет — поднимаем движок в этом же процессе.
+        ///
+        /// Зачем: после распаковки архива и двойного клика службы ещё нет, а без
+        /// движка интерфейсу некуда отправлять команды — все кнопки просто
+        /// ничего не делают, и это выглядит как «сломалось». Движок тот же
+        /// самый (`ServiceRunner`), что у `--engine` и у службы: канал, ВМ и
+        /// сторож те же, разница только в том, кто его держит.
+        ///
+        /// Цена: ВМ живут, пока открыт интерфейс (vmhost — отдельные процессы,
+        /// но движок в этом). Для «пусть работает в фоне» нужна служба.
+        /// </summary>
+        private void EnsurePortableEngine(ServiceStatus status)
+        {
+            if (_engine != null || _engineTried) return;
+
+            // служба установлена — не отбираем у неё канал, даже если она стоит:
+            // её и надо запускать, а не плодить второй движок
+            if (status.Installed) return;
+
+            _engineTried = true;
+
+            try
+            {
+                ServiceRunner engine = new ServiceRunner();
+                engine.Start();
+
+                _engine = engine;
+                Log.Info("UI", "портативный режим: движок работает в процессе интерфейса (служба не установлена)");
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("UI", "портативный движок", ex);
+            }
+        }
+
         private async Task<object> CallService(string method, Dictionary<string, object> parameters, int timeoutMs)
         {
             await EnsureClientAsync();
@@ -505,12 +545,17 @@ namespace Hv86.App
         {
             ServiceStatus status = await Task.Run(() => ServiceManager.Query()).ConfigureAwait(false);
 
+            // службы нет вообще (свежий архив, двойной клик) - иначе интерфейсу
+            // некуда отправлять команды и все кнопки "мертвы"
+            EnsurePortableEngine(status);
+
             Dictionary<string, object> payload = WebBridge.Msg("state",
                 "service", Json.Obj(
                     "installed", status.Installed,
                     "running", status.Running,
                     "state", status.State,
                     "problem", status.Problem),
+                "portable", _engine != null,
                 "elevated", Elevation.IsElevated,
                 "version", AppInfo.Version,
                 "v86", AppInfo.V86Version,
