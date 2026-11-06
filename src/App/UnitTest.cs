@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Text;
 using Hv86.Core;
@@ -30,6 +31,7 @@ namespace Hv86.App
                 TestJson();
                 TestStateBlocks(dir);
                 TestPaths(dir);
+                TestAnsi();
             }
             catch (Exception ex)
             {
@@ -152,6 +154,20 @@ namespace Hv86.App
 
             Check(!VmStore.IsValidId("../etc"), "paths: id rejects traversal");
             Check(!VmStore.IsValidId("zzzz"), "paths: id rejects non-hex");
+        }
+
+        private static void TestAnsi()
+        {
+            // так v86 отдаёт экран в headless-режиме: текст + truecolor SGR
+            List<AnsiRun> runs = AnsiText.Parse("A\u001b[48;2;0;0;170mB\u001b[0mC", 80);
+
+            Check(runs.Count == 3, "ansi: three runs");
+            Check(runs.Count > 0 && runs[0].Text == "A", "ansi: first run text");
+            Check(runs.Count > 1 && runs[1].Text == "B", "ansi: colored run text");
+            Check(runs.Count > 1 && runs[1].Background == Color.FromArgb(0, 0, 170), "ansi: background parsed");
+            Check(runs.Count > 2 && runs[2].Foreground == AnsiText.DefaultForeground, "ansi: reset restores colour");
+            Check(AnsiText.Strip("A\u001b[38;2;1;2;3mB\u001b[0m") == "AB", "ansi: strip");
+            Check(AnsiText.Parse("\u001b[0m", 80).Count == 0, "ansi: empty line has no runs");
         }
 
         private static void Check(bool ok, string what)

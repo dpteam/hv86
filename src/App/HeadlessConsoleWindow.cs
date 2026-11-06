@@ -439,102 +439,27 @@ namespace Hv86.App
                 for (int row = 0; row < _lines.Length && row < Rows; row++)
                 {
                     float y = row * CellHeight;
-                    DrawRow(g, _lines[row], 0f, y);
-                }
-            }
+                    float x = 0f;
 
-            private void DrawRow(Graphics g, string line, float x, float y)
-            {
-                Color fg = Color.FromArgb(0xC8, 0xC8, 0xC8);
-                Color bg = Color.Black;
-
-                StringBuilder run = new StringBuilder();
-                int column = 0;
-                int i = 0;
-
-                while (i < line.Length && column < Cols)
-                {
-                    if (line[i] == '\u001b' && i + 1 < line.Length && line[i + 1] == '[')
+                    foreach (AnsiRun run in AnsiText.Parse(_lines[row], Cols))
                     {
-                        int end = line.IndexOf('m', i);
-                        if (end < 0) break;
+                        if (run.Background != AnsiText.DefaultBackground)
+                        {
+                            using (SolidBrush brush = new SolidBrush(run.Background))
+                                g.FillRectangle(brush, x, y, run.Text.Length * CellWidth, CellHeight);
+                        }
 
-                        column = Flush(g, run, x, y, column, fg, bg);
-                        ApplySgr(line.Substring(i + 2, end - i - 2), ref fg, ref bg);
+                        TextRenderer.DrawText(g, run.Text, _font,
+                            new Point((int)Math.Round(x), (int)Math.Round(y)),
+                            run.Foreground,
+                            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
 
-                        i = end + 1;
-                        continue;
-                    }
-
-                    run.Append(line[i]);
-                    column++;
-                    i++;
-                }
-
-                Flush(g, run, x, y, column, fg, bg);
-            }
-
-            private int Flush(Graphics g, StringBuilder run, float x, float y, int column, Color fg, Color bg)
-            {
-                if (run.Length == 0) return column - run.Length;
-
-                int length = run.Length;
-                int startColumn = column - length;
-
-                if (bg != Color.Black)
-                {
-                    using (SolidBrush brush = new SolidBrush(bg))
-                        g.FillRectangle(brush, x + startColumn * CellWidth, y, length * CellWidth, CellHeight);
-                }
-
-                TextRenderer.DrawText(g, run.ToString(), _font,
-                    new Point((int)Math.Round(x + startColumn * CellWidth), (int)Math.Round(y)),
-                    fg, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
-
-                run.Clear();
-                return column;
-            }
-
-            private static void ApplySgr(string spec, ref Color fg, ref Color bg)
-            {
-                if (string.IsNullOrEmpty(spec) || spec == "0")
-                {
-                    fg = Color.FromArgb(0xC8, 0xC8, 0xC8);
-                    bg = Color.Black;
-                    return;
-                }
-
-                string[] parts = spec.Split(';');
-
-                for (int i = 0; i < parts.Length; i++)
-                {
-                    if (parts[i] == "0")
-                    {
-                        fg = Color.FromArgb(0xC8, 0xC8, 0xC8);
-                        bg = Color.Black;
-                        continue;
-                    }
-
-                    if ((parts[i] == "38" || parts[i] == "48") && i + 4 < parts.Length && parts[i + 1] == "2")
-                    {
-                        int r = Parse(parts[i + 2], 255);
-                        int g = Parse(parts[i + 3], 255);
-                        int b = Parse(parts[i + 4], 255);
-
-                        Color color = Color.FromArgb(r, g, b);
-
-                        if (parts[i] == "38") fg = color; else bg = color;
-
-                        i += 4;
+                        x += run.Text.Length * CellWidth;
                     }
                 }
             }
 
-            private static int Parse(string text, int fallback)
-            {
-                int value;
-                return int.TryParse(text, out value) ? Math.Max(0, Math.Min(255, value)) : fallback;
-            }
+
         }
     }
 }
