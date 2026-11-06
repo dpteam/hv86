@@ -38,6 +38,7 @@ namespace Hv86.App
                 TestEgress();
                 TestEgressGate();
                 TestPresets();
+                TestHostSettings();
                 TestImagePack(dir);
                 TestShare(dir);
             }
@@ -323,7 +324,35 @@ namespace Hv86.App
         }
 
         /// <summary>
-        /// Каталоги старых ОС отдают образы в ZIP (а иногда в RAR/7z).
+        /// Настройки хоста (hv86.json): шрифт текстового режима по умолчанию.
+        /// Нужны, чтобы «шрифт как на хосте» не зависел от конкретной ВМ.
+        /// </summary>
+        private static void TestHostSettings()
+        {
+            HostSettings.Invalidate();
+
+            HostSettings.TextFont = "Consolas";
+            HostSettings.TextFontSize = 16;
+            HostSettings.Invalidate();
+
+            Check(HostSettings.TextFont == "Consolas" && HostSettings.TextFontSize == 16,
+                "host settings: round-trip through hv86.json");
+
+            Check(File.Exists(Path.Combine(Paths.Root, "hv86.json")),
+                "host settings: file written");
+
+            // границы: размер не может быть отрицательным или гигантским
+            HostSettings.TextFontSize = -5;
+            Check(HostSettings.TextFontSize == 0, "host settings: negative size is clamped");
+
+            HostSettings.TextFontSize = 999;
+            Check(HostSettings.TextFontSize == 48, "host settings: huge size is clamped");
+
+            HostSettings.TextFont = "";
+            HostSettings.TextFontSize = 0;
+        }
+
+        /// <summary>
         /// Проверяем распознавание по сигнатуре и распаковку образа.
         /// </summary>
         private static void TestImagePack(string dir)

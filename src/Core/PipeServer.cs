@@ -195,14 +195,30 @@ namespace Hv86.Core
 
         private sealed class Client : IDisposable
         {
+            /// <summary>Сколько сообщений держим в очереди, прежде чем выбрасывать старые.</summary>
+            private const int MaxQueued = 512;
+
             private readonly NamedPipeServerStream _pipe;
             private readonly object _writeGate = new object();
+
+            // Очередь и свой поток записи: Broadcast вызывается из UI-потока
+            // vmhost, а WriteLine в заполненный канал блокируется навсегда, если
+            // клиент перестал читать. Тогда окно ВМ перестаёт отвечать - именно
+            // так и выглядел баг "не закрыть окно, пока ВМ работает".
+            private readonly System.Collections.Concurrent.ConcurrentQueue<string> _queue =
+                new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+            private readonly SemaphoreSlim _signal = new SemaphoreSlim(0);
+            private readonly Task _writer;
+            private volatile bool _broken;
 
             public Client(NamedPipeServerStream pipe)
             {
                 _pipe = pipe;
                 Reader = new StreamReader(pipe, new UTF8Encoding(false), false, 65536, true);
                 Writer = new StreamWriter(pipe, new UTF8Encoding(false), 65536, true) { AutoFlush = true };
+
+                _writer = Task.Run(() => WriteLoopAsync());
             }
 
             public StreamReader Reader { get; private set; }
@@ -210,19 +226,62 @@ namespace Hv86.Core
 
             public void Send(string line)
             {
-                if (string.IsNullOrEmpty(line)) return;
-                lock (_writeGate)
+                if (string.IsNullOrEmpty(line) || _broken) return;
+
+                _queue.Enqueue(line);
+
+                // Переполнение: выбрасываем самое старое. Обычно это устаревшие
+                // метрики, а свежие важнее.
+                while (_queue.Count > MaxQueued && _queue.TryDequeue(out _))
                 {
-                    try { Writer.WriteLine(line); }
-                    catch (Exception ex) { Log.Debug("PIPE", "запись: " + ex.Message); }
+                }
+
+                try { _signal.Release(); }
+                catch (ObjectDisposedException) { }
+                catch (SemaphoreFullException) { }
+            }
+
+            private async Task WriteLoopAsync()
+            {
+                while (!_broken)
+                {
+                    try
+                    {
+                        await _signal.WaitAsync().ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return;
+                    }
+
+                    while (_queue.TryDequeue(out string line))
+                    {
+                        lock (_writeGate)
+                        {
+                            try { Writer.WriteLine(line); }
+                            catch (Exception ex)
+                            {
+                                Log.Debug("PIPE", "запись: " + ex.Message);
+                                _broken = true;
+                                return;
+                            }
+                        }
+                    }
                 }
             }
 
             public void Dispose()
             {
+                _broken = true;
+
+                try { _signal.Release(); } catch { }
+
+                try { _writer?.Wait(1000); } catch { }
+
                 try { Reader?.Dispose(); } catch { }
                 try { Writer?.Dispose(); } catch { }
                 try { _pipe?.Dispose(); } catch { }
+                try { _signal.Dispose(); } catch { }
             }
         }
     }

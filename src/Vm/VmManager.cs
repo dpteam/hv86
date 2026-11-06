@@ -876,6 +876,17 @@ namespace Hv86.Vm
                 ApplyShare(def, parameters);
                 ApplyEgress(def, parameters);
 
+                // шрифт текстового режима: меняется на лету, к гостю отношения
+                // не имеет - только отрисовка на хосте
+                if (parameters.ContainsKey("text_font"))
+                {
+                    string font = (Json.GetString(parameters, "text_font", "") ?? "").Trim();
+                    def.TextFont = font.Length > 128 ? font.Substring(0, 128) : font;
+                }
+
+                if (parameters.ContainsKey("text_font_size"))
+                    def.TextFontSize = Math.Max(0, Math.Min(48, Json.GetInt(parameters, "text_font_size", 0)));
+
                 runtime.NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, def.FtIntervalMs));
 
                 try { VmStore.Save(def); } catch (Exception ex) { Log.Warn("VM", "сохранение настроек: " + ex.Message); }
@@ -927,6 +938,23 @@ namespace Hv86.Vm
                     catch (Exception ex)
                     {
                         Log.Warn("VM", "применение политики egress: " + ex.Message);
+                    }
+                });
+
+                // шрифт текстового режима применяем сразу: перезапуск не нужен
+                string font = runtime.Def.TextFont;
+                int fontSize = runtime.Def.TextFontSize;
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await runtime.Proc.Client.CallForResultAsync("vm.font",
+                            Json.Obj("font", font, "size", fontSize), 15000).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("VM", "применение шрифта: " + ex.Message);
                     }
                 });
             }

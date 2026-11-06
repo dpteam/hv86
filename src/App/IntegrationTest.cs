@@ -145,8 +145,19 @@ namespace Hv86.App
                 else
                     Fail("web keyboard input failed: " + Json.Stringify(typed));
 
-                // масштаб экрана консоли: 1x / 2x / fit (через screen_set_scale v86)
-                Dictionary<string, object> size1 = CallVm(id, "vm.debug.scale", Json.Obj("mode", "1"), 30000);
+                // масштаб экрана консоли: 1x / 2x / fit (через zoom контейнера)
+                Dictionary<string, object> size1 = null;
+
+                // экран мог быть ещё пустым (гость грузится): ждём, пока у
+                // текстового слоя появится высота, иначе fit считать не из чего
+                for (int attempt = 0; attempt < 20; attempt++)
+                {
+                    size1 = CallVm(id, "vm.debug.scale", Json.Obj("mode", "1"), 30000);
+                    if (Json.GetInt(size1, "height", 0) > 0 && Json.GetInt(size1, "width", 0) > 0) break;
+
+                    System.Threading.Thread.Sleep(500);
+                }
+
                 Dictionary<string, object> size2 = CallVm(id, "vm.debug.scale", Json.Obj("mode", "2"), 30000);
 
                 int w1 = Json.GetInt(size1, "width", 0);
@@ -175,6 +186,25 @@ namespace Hv86.App
                     Fail("console fit did not compute a scale: " + Json.Stringify(fit));
 
                 CallVm(id, "vm.debug.scale", Json.Obj("mode", "1"), 30000);
+
+                // шрифт текстового режима: per-VM, применяется на лету
+                Call(client, "vm.update", Json.Obj("id", id,
+                    "text_font", "Consolas", "text_font_size", 16), 30000);
+
+                System.Threading.Thread.Sleep(700);
+
+                Dictionary<string, object> fontProbe = CallVm(id, "vm.debug.scale", Json.Obj("mode", "1"), 30000);
+                string fontFamily = Json.GetString(fontProbe, "font", "");
+                string fontSize = Json.GetString(fontProbe, "fontSize", "");
+
+                if (fontFamily.IndexOf("Consolas", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    fontSize.StartsWith("16", StringComparison.Ordinal))
+                    Ok("console font", fontFamily + " " + fontSize);
+                else
+                    Fail("text font was not applied in the page: " + Json.Stringify(fontProbe));
+
+                Call(client, "vm.update", Json.Obj("id", id,
+                    "text_font", "", "text_font_size", 0), 30000);
 
                 string forwardResult = ProbeForward("127.0.0.1", forwardPort, 45000);
                 Ok("port forward", forwardResult);

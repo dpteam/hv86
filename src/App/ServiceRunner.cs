@@ -78,6 +78,13 @@ namespace Hv86.App
                 case "host.log":
                     return Json.Obj("text", Log.Tail(Json.GetInt(parameters, "lines", 200)));
 
+                // настройки хоста: сейчас только шрифт текстового режима
+                case "host.settings":
+                    return HostSettings.View();
+
+                case "host.settings.set":
+                    return HostSettings.Apply(parameters);
+
                 case "vm.list":
                     return _manager.ListView();
 

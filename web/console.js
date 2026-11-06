@@ -50,6 +50,32 @@
     var appliedScale = 1;
     var nativeSize = { w: 0, h: 0 };
 
+    // --------------------------------------------------------------- шрифт текста
+
+    // Текстовый режим v86 рисует <div> с построчным текстом: шрифт задаётся
+    // CSS, поэтому кастомизация сводится к font-family/size на этом слое.
+    // На гостя это не влияет - он про шрифт ничего не знает.
+    function applyTextFont(font, size) {
+        var layer = document.querySelector("#screen_container > div");
+        if (!layer) return;
+
+        if (font) layer.style.fontFamily = '"' + String(font).replace(/"/g, "") + '", monospace';
+        else layer.style.fontFamily = "";
+
+        var px = Number(size) || 0;
+
+        if (px > 0) {
+            layer.style.fontSize = px + "px";
+            layer.style.lineHeight = px + "px";
+        } else {
+            layer.style.fontSize = "";
+            layer.style.lineHeight = "";
+        }
+
+        // размер ячейки изменился - пересчитываем масштаб
+        requestAnimationFrame(function () { measureNative(); applyScale(); });
+    }
+
     // ---------------------------------------------------------------- масштаб
 
     // Масштабируем через CSS `zoom`, а не через screen_set_scale и не через
@@ -111,11 +137,22 @@
     }
 
     function measureNative() {
-        var cont = byId("screen_container");
-        if (!cont) return;
+        var canvas = document.querySelector("#screen_container canvas");
+        var text = document.querySelector("#screen_container > div");
 
-        var w = cont.scrollWidth;
-        var h = cont.scrollHeight;
+        var w = 0, h = 0;
+
+        // текстовый слой виден в текстовом режиме, canvas - в графическом;
+        // пустой слой даёт нули, поэтому пробуем оба
+        if (text && text.offsetWidth > 0 && text.offsetHeight > 0) {
+            w = text.offsetWidth;
+            h = text.offsetHeight;
+        }
+
+        if ((w <= 0 || h <= 0) && canvas && canvas.offsetWidth > 0 && canvas.offsetHeight > 0) {
+            w = canvas.offsetWidth;
+            h = canvas.offsetHeight;
+        }
 
         if (w > 0 && h > 0) nativeSize = { w: w, h: h };
     }
@@ -265,6 +302,9 @@
         config = c;
 
         hideIdle();
+
+        // шрифт текстового режима: свой у ВМ или хостовый (уже разрешён в C#)
+        applyTextFont(c.textFont, c.textSize);
 
         byId("vm-name").textContent = c.name || c.id || "VM";
         byId("vm-id").textContent = c.id || "";
@@ -700,6 +740,10 @@
                 showIdle(message);
                 break;
 
+            case "font":
+                applyTextFont(message.font, message.size);
+                break;
+
             case "type":
                 typeText(message);
                 break;
@@ -713,6 +757,8 @@
                 requestAnimationFrame(function () {
                     var cont = byId("screen_container");
                     var rect = cont ? cont.getBoundingClientRect() : { width: 0, height: 0 };
+                    var layer = document.querySelector("#screen_container > div");
+                    var style = layer ? getComputedStyle(layer) : null;
 
                     post({
                         action: "scaleResult",
@@ -720,6 +766,8 @@
                         scale: appliedScale,
                         width: Math.round(rect.width),
                         height: Math.round(rect.height),
+                        font: style ? style.fontFamily : "",
+                        fontSize: style ? style.fontSize : "",
                         wrap: (function () {
                             var wrap = document.querySelector(".screen-wrap");
                             return wrap ? wrap.clientWidth + "x" + wrap.clientHeight : "";

@@ -63,6 +63,7 @@
     <div class="spacer"></div>
 
     <button class="btn ghost" data-act="refresh" data-i18n="btn.refresh">Refresh</button>
+    <button class="btn ghost" data-act="host.settings" data-i18n="btn.hostSettings">Settings</button>
     <button class="btn primary" data-act="new" data-i18n="btn.newVm">New VM…</button>
     <select id="lang" class="btn" style="padding:4px 6px">
       <option value="ru">RU</option>
@@ -203,6 +204,11 @@
       </div>
 
       <div class="field">
+        <label data-i18n="new.presetSource">Catalog</label>
+        <select id="newSource"></select>
+      </div>
+
+      <div class="field">
         <label data-i18n="new.preset">Preset</label>
         <select id="newPreset"></select>
         <div class="hint" id="newPresetHint"></div>
@@ -284,6 +290,45 @@
   </div>
 </div>
 
+<!-- ------------------------------------------------------- настройки хоста -->
+<div class="overlay hidden" id="hostSettingsModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span data-i18n="host.title">Host settings</span>
+      <button class="x" data-close="hostSettingsModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <div class="grid2">
+          <div>
+            <label data-i18n="set.textFont">Text mode font</label>
+            <select id="hostTextFont">
+              <option value="">monospace (built-in)</option>
+              <option value="Consolas">Consolas</option>
+              <option value="Cascadia Mono">Cascadia Mono</option>
+              <option value="Lucida Console">Lucida Console</option>
+              <option value="Courier New">Courier New</option>
+              <option value="MS Gothic">MS Gothic</option>
+              <option value="SimSun">SimSun</option>
+              <option value="Terminal">Terminal</option>
+            </select>
+          </div>
+          <div>
+            <label data-i18n="set.textSize">Font size, px (0 = auto)</label>
+            <input type="number" id="hostTextSize" min="0" max="48" step="1">
+          </div>
+        </div>
+        <div class="hint" data-i18n="host.textHint">Default for all VMs. A VM can override it in its own settings. Applied on the next console start.</div>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+        <button class="btn ghost" data-close="hostSettingsModal" data-i18n="btn.cancel">Cancel</button>
+        <button class="btn primary" data-act="host.settings.save" data-i18n="btn.save">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ------------------------------------------------------------ настройки ВМ -->
 <div class="overlay hidden" id="settingsModal">
   <div class="modal">
@@ -295,6 +340,29 @@
       <div class="field">
         <label data-i18n="new.name">Name</label>
         <input type="text" id="setName">
+      </div>
+
+      <div class="field">
+        <div class="grid2">
+          <div>
+            <label data-i18n="set.textFont">Text mode font</label>
+            <select id="setTextFont">
+              <option value="" data-i18n="set.fontDefault">— as on host —</option>
+              <option value="Consolas">Consolas</option>
+              <option value="Cascadia Mono">Cascadia Mono</option>
+              <option value="Lucida Console">Lucida Console</option>
+              <option value="Courier New">Courier New</option>
+              <option value="MS Gothic">MS Gothic</option>
+              <option value="SimSun">SimSun</option>
+              <option value="Terminal">Terminal</option>
+            </select>
+          </div>
+          <div>
+            <label data-i18n="set.textSize">Font size, px (0 = auto)</label>
+            <input type="number" id="setTextSize" min="0" max="48" step="1">
+          </div>
+        </div>
+        <div class="hint" data-i18n="set.textFontHint">Only affects drawing on the host: the guest sees ordinary VGA text and does not know about fonts.</div>
       </div>
 
       <div class="field">

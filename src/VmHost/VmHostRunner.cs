@@ -463,6 +463,16 @@ namespace Hv86.VmHost
                     "readonly", _vm.ShareReadOnly);
             }
 
+            // шрифт текстового режима: у ВМ может быть свой, иначе - хостовый
+            string textFont = _vm.TextFont;
+            int textSize = _vm.TextFontSize;
+
+            if (string.IsNullOrEmpty(textFont)) textFont = HostSettings.TextFont;
+            if (textSize <= 0) textSize = HostSettings.TextFontSize;
+
+            config["textFont"] = textFont ?? "";
+            config["textSize"] = textSize;
+
             // реплика стартует с загруженным state'ом и НЕ запускает CPU,
             // пока её не повысят
             if (_replica) config["paused"] = true;
@@ -845,6 +855,20 @@ namespace Hv86.VmHost
                     _form.Post(Json.Obj("action", "reset"));
                     _state = "running";
                     return Json.Obj("state", _state);
+
+                // шрифт текстового режима поменяли в интерфейсе: применяем сразу,
+                // перезапускать ВМ не нужно (это только отрисовка)
+                case "vm.font":
+                {
+                    string font = Json.GetString(parameters, "font", "");
+                    int size = Json.GetInt(parameters, "size", 0);
+
+                    _vm.TextFont = font;
+                    _vm.TextFontSize = size;
+
+                    _form.Post(Json.Obj("action", "font", "font", font, "size", size));
+                    return Json.Obj("ok", true);
+                }
 
                 // окно было открыто без гостя (idle) - служба просит загрузить
                 case "vm.boot":

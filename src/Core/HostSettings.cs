@@ -1,0 +1,115 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+
+namespace Hv86.Core
+{
+    /// <summary>
+    /// Настройки хоста (`%ProgramData%\hv86\hv86.json`).
+    ///
+    /// Здесь только то, что относится к самому hv86, а не к конкретной ВМ:
+    /// шрифт текстового режима по умолчанию. ВМ может переопределить его у себя
+    /// (`vm.json` → `text`), а пустое значение означает «как на хосте».
+    ///
+    /// Файл читается и пишется атомарно (`AtomicFile`), формат — обычный JSON;
+    /// незнакомые ключи сохраняются как есть, чтобы не терять чужие настройки.
+    /// </summary>
+    public static class HostSettings
+    {
+        /// <summary>Семейство шрифта текстового режима; пусто - встроенный monospace.</summary>
+        public static string TextFont
+        {
+            get { return (string)Get("text_font", "") ?? ""; }
+            set { Set("text_font", value ?? ""); }
+        }
+
+        /// <summary>Размер шрифта в px; 0 - как задано в CSS консоли (14px).</summary>
+        public static int TextFontSize
+        {
+            get { return Convert.ToInt32(Get("text_font_size", 0), System.Globalization.CultureInfo.InvariantCulture); }
+            set { Set("text_font_size", (long)Math.Max(0, Math.Min(48, value))); }
+        }
+
+        // ------------------------------------------------------------- хранение
+
+        private static readonly object Gate = new object();
+        private static Dictionary<string, object> _cache;
+
+        private static string FilePath
+        {
+            get { return Path.Combine(Paths.Root, "hv86.json"); }
+        }
+
+        private static Dictionary<string, object> Load()
+        {
+            lock (Gate)
+            {
+                if (_cache != null) return _cache;
+
+                try
+                {
+                    _cache = Json.ReadFile(FilePath) ?? new Dictionary<string, object>(StringComparer.Ordinal);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("CFG", "hv86.json: " + ex.Message);
+                    _cache = new Dictionary<string, object>(StringComparer.Ordinal);
+                }
+
+                return _cache;
+            }
+        }
+
+        private static object Get(string key, object fallback)
+        {
+            lock (Gate)
+            {
+                object value;
+
+                return Load().TryGetValue(key, out value) && value != null ? value : fallback;
+            }
+        }
+
+        private static void Set(string key, object value)
+        {
+            lock (Gate)
+            {
+                Load()[key] = value;
+
+                try
+                {
+                    Paths.EnsureDirectories();
+                    Json.WriteFile(FilePath, _cache);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("CFG", "запись hv86.json: " + ex.Message);
+                }
+            }
+        }
+
+        /// <summary>Сброс кэша (тесты).</summary>
+        public static void Invalidate()
+        {
+            lock (Gate) _cache = null;
+        }
+
+        public static Dictionary<string, object> View()
+        {
+            return Json.Obj("text_font", TextFont, "text_font_size", TextFontSize);
+        }
+
+        public static Dictionary<string, object> Apply(Dictionary<string, object> parameters)
+        {
+            if (parameters != null)
+            {
+                if (parameters.ContainsKey("text_font")) TextFont = Json.GetString(parameters, "text_font", "");
+
+                if (parameters.ContainsKey("text_font_size"))
+                    TextFontSize = Json.GetInt(parameters, "text_font_size", 0);
+            }
+
+            return View();
+        }
+    }
+}

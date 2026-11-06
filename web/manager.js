@@ -340,36 +340,54 @@
         byId(id).classList.add("hidden");
     }
 
+    // Каталоги выбираются отдельно от шаблона: список из 130 записей в одном
+    // селекте тормозит, да и искать в нём неудобно.
+    function fillSources() {
+        var select = byId("newSource");
+        var known = { "": 0, "copy.sh": 0, "old-dos.ru": 0 };
+
+        for (var i = 0; i < state.presets.length; i++) {
+            var source = state.presets[i].source || "";
+            known[source] = (known[source] || 0) + 1;
+        }
+
+        var previous = select.value;
+        select.innerHTML = "";
+
+        var labels = {
+            "": T("new.sourceOwn"),
+            "copy.sh": T("new.sourceCopy"),
+            "old-dos.ru": T("new.sourceOldDos")
+        };
+
+        for (var key in known) {
+            if (!known.hasOwnProperty(key) || known[key] === 0) continue;
+
+            var option = document.createElement("option");
+            option.value = key;
+            option.textContent = (labels[key] || key) + " (" + known[key] + ")";
+            select.appendChild(option);
+        }
+
+        if (previous) select.value = previous;
+    }
+
     function fillPresets() {
         var select = byId("newPreset");
+        var source = byId("newSource").value || "";
+
         select.innerHTML = '<option value="">' + esc(T("new.noPreset")) + '</option>';
-
-        // два каталога: свои пресеты и образы copy.sh/v86 (их 100+)
-        var own = document.createElement("optgroup");
-        own.label = T("new.sourceOwn");
-
-        var copy = document.createElement("optgroup");
-        copy.label = T("new.sourceCopy");
-
-        var old = document.createElement("optgroup");
-        old.label = T("new.sourceOldDos");
 
         for (var i = 0; i < state.presets.length; i++) {
             var preset = state.presets[i];
+
+            if ((preset.source || "") !== source) continue;
+
             var option = document.createElement("option");
             option.value = preset.id;
             option.textContent = preset.name + (preset.size ? " · " + fmtSize(preset.size) : "");
-
-            var group = preset.source === "copy.sh" ? copy
-                      : preset.source === "old-dos.ru" ? old
-                      : own;
-
-            group.appendChild(option);
+            select.appendChild(option);
         }
-
-        if (own.childNodes.length) select.appendChild(own);
-        if (copy.childNodes.length) select.appendChild(copy);
-        if (old.childNodes.length) select.appendChild(old);
     }
 
     function applyPreset() {
@@ -395,6 +413,7 @@
     }
 
     function openNewVm() {
+        fillSources();
         fillPresets();
         applyPreset();
 
@@ -426,6 +445,37 @@
         logLine(T("new.creating"));
     }
 
+    // ------------------------------------------------------- настройки хоста
+
+    function openHostSettings() {
+        var settings = state.hostSettings || {};
+
+        var select = byId("hostTextFont");
+        var font = settings.text_font || "";
+
+        if (font && !Array.prototype.some.call(select.options, function (o) { return o.value === font; })) {
+            var extra = document.createElement("option");
+            extra.value = font;
+            extra.textContent = font;
+            select.appendChild(extra);
+        }
+
+        select.value = font;
+        byId("hostTextSize").value = String(settings.text_font_size || 0);
+
+        openModal("hostSettingsModal");
+    }
+
+    function saveHostSettings() {
+        post({
+            action: "host.settings.set",
+            text_font: byId("hostTextFont").value,
+            text_font_size: Math.max(0, Number(byId("hostTextSize").value) || 0)
+        });
+
+        closeModal("hostSettingsModal");
+    }
+
     // ------------------------------------------------------------ настройки ВМ
 
     function openSettings() {
@@ -448,6 +498,20 @@
         byId("setRestart").value = vm.restart || "on-failure";
         byId("setAttempts").value = vm.max_attempts === undefined ? 5 : vm.max_attempts;
         byId("setRestore").checked = vm.restore_on_crash !== false;
+
+        // шрифт текстового режима: пусто/0 - как в настройках хоста
+        var fontSelect = byId("setTextFont");
+        var font = vm.text_font || "";
+
+        if (font && !Array.prototype.some.call(fontSelect.options, function (o) { return o.value === font; })) {
+            var extra = document.createElement("option");
+            extra.value = font;
+            extra.textContent = font;
+            fontSelect.appendChild(extra);
+        }
+
+        fontSelect.value = font;
+        byId("setTextSize").value = String(vm.text_font_size || 0);
 
         state.fwdDraft = (vm.forwards || []).slice();
         renderForwards();
@@ -546,6 +610,8 @@
             share_readonly: byId("setShareReadOnly").checked,
             egress_mode: byId("setEgressMode").value,
             egress_allow: byId("setEgressAllow").value.split("\n").map(function (line) { return line.trim(); }).filter(function (line) { return line.length > 0; }),
+            text_font: byId("setTextFont").value,
+            text_font_size: Math.max(0, Number(byId("setTextSize").value) || 0),
             forwards: state.fwdDraft
         });
 
@@ -627,6 +693,8 @@
 
             case "vm.settings": openSettings(); return;
             case "vm.update": saveSettings(); return;
+            case "host.settings": openHostSettings(); return;
+            case "host.settings.save": saveHostSettings(); return;
             case "fwd.add": addForward(); return;
 
             case "vm.clone":
@@ -755,6 +823,7 @@
     });
 
     byId("newPreset").addEventListener("change", applyPreset);
+    byId("newSource").addEventListener("change", function () { fillPresets(); applyPreset(); });
     byId("setNetMode").addEventListener("change", renderForwards);
     byId("lang").value = lang;
 
@@ -789,6 +858,7 @@
             case "state":
                 state.service = message.service || null;
                 state.portable = !!message.portable;
+                state.hostSettings = message.host_settings || null;
                 state.host = message.host || null;
                 state.vms = message.vms || [];
                 state.presets = message.presets || [];

@@ -53,6 +53,16 @@ namespace Hv86.Vm
 
         public bool Autostart;
 
+        /// <summary>
+        /// Шрифт текстового режима (VGA-текст): имя семейства. Пусто - как в
+        /// настройках хоста. Влияет только на отрисовку на хосте, в гостя
+        /// ничего не передаётся.
+        /// </summary>
+        public string TextFont = "";
+
+        /// <summary>Размер шрифта текстового режима в px. 0 - как на хосте.</summary>
+        public int TextFontSize;
+
         // Динамическая отказоустойчивость
         public string FtMode = "checkpoint";          // off | checkpoint | replica (позже)
         public int FtIntervalMs = 15000;
@@ -154,6 +164,7 @@ namespace Hv86.Vm
                 "boot_order", BootOrder,
                 "autostart", Autostart,
                 "share", shareBlock,
+                "text", Json.Obj("font", TextFont, "size", TextFontSize),
                 "ft", ft,
                 "state", State,
                 "restarts", Restarts,
@@ -181,6 +192,13 @@ namespace Hv86.Vm
                 vm.HdaFile = Json.GetString(media, "hda", null);
                 vm.CdromFile = Json.GetString(media, "cdrom", null);
                 vm.FdaFile = Json.GetString(media, "fda", null);
+            }
+
+            Dictionary<string, object> textBlock = Json.GetObject(map, "text");
+            if (textBlock != null)
+            {
+                vm.TextFont = Json.GetString(textBlock, "font", "");
+                vm.TextFontSize = Json.GetInt(textBlock, "size", 0);
             }
 
             Dictionary<string, object> net = Json.GetObject(map, "net");
@@ -264,6 +282,8 @@ namespace Hv86.Vm
                 "egress_mode", EgressMode,
                 "egress_allow", ViewAllow(),
                 "ft_mode", FtMode,
+                "text_font", TextFont,
+                "text_font_size", TextFontSize,
                 "restart", Restart,
                 "interval_ms", FtIntervalMs,
                 "ft_keep", FtKeep,

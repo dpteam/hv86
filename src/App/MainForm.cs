@@ -400,6 +400,25 @@ namespace Hv86.App
             _bridge.Register("open.data", delegate { OpenFolder(Paths.Root); });
             _bridge.Register("open.logs", delegate { OpenFolder(Paths.LogDir); });
 
+            // настройки хоста: сейчас только шрифт текстового режима
+            _bridge.Register("host.settings.set", async message =>
+            {
+                Dictionary<string, object> parameters = Clone(message);
+                parameters.Remove("action");
+
+                try
+                {
+                    await CallService("host.settings.set", parameters, 15000).ConfigureAwait(false);
+                    HostSettings.Invalidate();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("UI", "настройки хоста: " + ex.Message);
+                }
+
+                await PushStateAsync().ConfigureAwait(false);
+            });
+
             // ------------------------------------------------ настройки и архив
 
             _bridge.Register("vm.update", async message =>
@@ -627,6 +646,7 @@ namespace Hv86.App
                     "state", status.State,
                     "problem", status.Problem),
                 "portable", _engine != null,
+                "host_settings", HostSettings.View(),
                 "elevated", Elevation.IsElevated,
                 "version", AppInfo.Version,
                 "v86", AppInfo.V86Version,
