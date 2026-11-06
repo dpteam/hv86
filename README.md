@@ -1,5 +1,7 @@
 # hv86
 
+[![build](https://github.com/dpteam/hv86/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/dpteam/hv86/actions/workflows/build.yml)
+
 Гипервизор «по смыслу как Hyper-V», но виртуальные машины исполняет
 [v86](https://github.com/copy/v86) — x86-эмулятор, скомпилированный в WebAssembly.
 Управляющая часть, служба Windows, окна, снапшоты и отказоустойчивость — на C# и WebView2.
@@ -98,7 +100,23 @@ tools\selftest.ps1 -SkipItest   # без сценария со службой
 | `--unit` | формат state-файла v86, применение блоков диска, JSON, пути |
 | `--selftest` | вшитые ресурсы, WebView2 Runtime, каталог данных, каталог пресетов, служба |
 | `--smoke <образ>` | настоящая загрузка гостя → `save_state` → перезапуск из state |
-| `--itest` | движок + vmhost: создать → загрузить → снапшот → убить vmhost → автоподъём → откат → удалить |
+| `--itest` | движок + vmhost: создать → загрузить → снапшот → убить vmhost → подъём / повышение реплики → откат → удалить |
+| `--htest` | headless: FreeDOS в Node, VGA-текст, 9p-протокол, снапшот |
+
+### CI и артефакты
+
+`.github/workflows/build.yml` (GitHub Actions, `windows-2022`) собирает то же, что
+`tools\publish.cmd`, при пуше в `main`, на PR и по тегу `v*`:
+
+- качает WebView2 SDK и v86 скриптами `tools\fetch-*.ps1` (кэш — по хэшу скриптов);
+- `npm ci` для headless-движка, сборка Release;
+- гоняет `--unit`, `--selftest`, `--htest`;
+- публикует `hv86-<версия>-win-x64.zip` (exe + `engine\`) и `checksums.txt` в артефакты,
+  а по тегу `v*` — ещё и в GitHub Release.
+
+`--smoke` и `--itest` в CI не запускаются: им нужен WebView2 в сессии пользователя,
+а на runner'е сессия 0 — тест был бы красным всегда. Эти два шага остаются локальными,
+через `tools\selftest.ps1`.
 
 ## Честные ограничения
 

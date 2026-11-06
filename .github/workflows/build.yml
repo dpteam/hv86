@@ -1,0 +1,178 @@
+# hv86 - сборка, тесты и артефакты.
+#
+# Что здесь есть и чего здесь нет:
+#   * сборка Release + публикация single-file (тот же tools\publish.cmd, что и локально);
+#   * артефакт hv86-<версия>-win-x64.zip (exe + engine\) и checksums.txt;
+#   * по тегу v* - GitHub Release с этим же архивом;
+#   * тесты: --unit, --selftest, --htest (FreeDOS реально грузится в Node).
+#
+# Чего нет и почему: --smoke и --itest запускают WebView2, а он не работает
+# в сессии 0 - на runner'е это заведомо красный тест, а не проверка. Эти два
+# шага гоняются локально через tools\selftest.ps1 (там же они и описаны).
+#
+# Версии v86 и WebView2 SDK не дублируются здесь: их тянут tools\fetch-*.ps1,
+# поэтому кэш инвалидируется по хэшу самих скриптов.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # нужно для Release по тегу
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+  DOTNET_VERSION: "9.0.x"
+
+jobs:
+  build:
+    name: windows-x64
+    runs-on: windows-2022
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # SDK и ассеты не лежат в репозитории (lib\webview2, assets\v86 в .gitignore),
+      # качаются скриптами - значит их можно и закэшировать
+      - name: Cache WebView2 SDK + v86
+        uses: actions/cache@v4
+        with:
+          path: |
+            lib/webview2
+            assets/v86
+          key: hv86-deps-${{ hashFiles('tools/fetch-webview2.ps1', 'tools/fetch-v86.ps1') }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: engine/package-lock.json
+
+      - name: Fetch WebView2 SDK
+        shell: powershell
+        run: .\tools\fetch-webview2.ps1
+
+      - name: Fetch v86
+        shell: powershell
+        run: .\tools\fetch-v86.ps1
+
+      - name: Install headless engine (v86 in Node)
+        shell: powershell
+        run: npm ci --prefix engine --no-audit --no-fund
+
+      # OutputPath в csproj зафиксирован (bin\), поэтому Debug и Release не расходятся
+      # по папкам - и тесты читают ровно тот dll, который собран здесь
+      - name: Build (Release)
+        run: dotnet build hv86.csproj -c Release -v minimal
+
+      - name: Read version
+        id: version
+        shell: powershell
+        run: |
+          $text = & dotnet .\bin\hv86.dll --version
+          $version = ([regex]'\d+\.\d+\.\d+').Match($text).Value
+          if (-not $version) { $version = '0.0.0' }
+          Write-Host "hv86 $version"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding ascii -Append
+
+      # --- тесты -------------------------------------------------------------
+      # HV86_ROOT: тесты пишут только в свой каталог и не трогают %ProgramData%\hv86
+
+      - name: Unit tests
+        shell: powershell
+        run: |
+          $env:HV86_ROOT = Join-Path $env:RUNNER_TEMP 'hv86-unit'
+          dotnet .\bin\hv86.dll --unit
+          exit $LastExitCode
+
+      - name: Self-test (resources, WebView2 runtime, presets)
+        shell: powershell
+        run: |
+          $env:HV86_ROOT = Join-Path $env:RUNNER_TEMP 'hv86-selftest'
+          dotnet .\bin\hv86.dll --selftest
+          exit $LastExitCode
+
+      # Единственный шаг, где реально загружается гость: v86 живёт в Node,
+      # поэтому сессия 0 тут не мешает
+      - name: Headless test (FreeDOS in Node, 9p, snapshot)
+        shell: powershell
+        run: |
+          $env:HV86_ROOT = Join-Path $env:RUNNER_TEMP 'hv86-htest'
+          dotnet .\bin\hv86.dll --htest
+          exit $LastExitCode
+
+      # --- публикация --------------------------------------------------------
+
+      - name: Publish (self-contained single-file)
+        shell: powershell
+        run: |
+          cmd /c tools\publish.cmd
+          if ($LastExitCode -ne 0) { exit $LastExitCode }
+
+      - name: Pack zip + checksums
+        id: pack
+        shell: powershell
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $name = "hv86-$version-win-x64"
+
+          $sevenZip = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+          if (Test-Path $sevenZip) {
+              & $sevenZip a -tzip -mx=6 "$name.zip" '.\publish\*' | Out-Null
+              if ($LastExitCode -ne 0) { exit $LastExitCode }
+          }
+          else {
+              Compress-Archive -Path 'publish\*' -DestinationPath "$name.zip" -CompressionLevel Optimal
+          }
+
+          $size = (Get-Item "$name.zip").Length
+          $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          "$hash  $name.zip" | Out-File -FilePath checksums.txt -Encoding ascii
+          Write-Host ("artifact: {0}.zip, {1:N0} bytes, sha256 {2}" -f $name, $size, $hash)
+
+          "artifact=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding ascii -Append
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact }}
+          path: |
+            ${{ steps.pack.outputs.artifact }}.zip
+            checksums.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      # Тег v* -> Release. Имя тега и версия в exe могут не совпасть (тег - руками),
+      # поэтому в описании пишется и то, и другое
+      - name: Release (tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.pack.outputs.artifact }}.zip
+            checksums.txt
+          generate_release_notes: true
+          body: |
+            hv86 ${{ steps.version.outputs.version }} (v86 0.5.473), Windows x64, self-contained.
+
+            Архив: `hv86.exe` + `engine\` (headless-движок для ВМ без сессии пользователя).
+            Распаковать и запустить `hv86.exe`; служба ставится через `hv86.exe --service install`.
+            SHA-256 архива - в `checksums.txt`.

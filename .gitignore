@@ -21,3 +21,7 @@ assets/hv86-256.png
 *.user
 *.log
 .vs/
+
+# CI/locally packed release archives
+hv86-*-win-x64.zip
+checksums.txt
