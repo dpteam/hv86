@@ -35,7 +35,7 @@ namespace Hv86
             bool isUi = !hasFlag && !isVmHost && !HasFlag(args, "--smoke") &&
                         !HasFlag(args, "--selftest") && !HasFlag(args, "--version") &&
                         !HasFlag(args, "--itest") && !HasFlag(args, "--engine") &&
-                        !HasFlag(args, "--unit");
+                        !HasFlag(args, "--unit") && !HasFlag(args, "--cli") && !HasFlag(args, "--ctl");
 
             if (!isUi) ConsoleHelper.Attach();
 
@@ -95,6 +95,25 @@ namespace Hv86
                 Log.Role = "unit";
                 Log.MinLevel = LogLevel.Warn;
                 return UnitTest.Run();
+            }
+
+            // ------------------------------------------------------------ консоль
+            if (HasFlag(args, "--cli") || HasFlag(args, "--ctl"))
+            {
+                Log.Role = "cli";
+                Log.MinLevel = LogLevel.Warn;
+
+                List<string> rest = new List<string>();
+
+                foreach (string arg in args)
+                {
+                    if (string.Equals(arg, "--cli", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(arg, "--ctl", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    rest.Add(arg);
+                }
+
+                return Cli.Run(rest.ToArray());
             }
 
             // --------------------------------------------------- integration test

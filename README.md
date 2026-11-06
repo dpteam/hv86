@@ -50,6 +50,28 @@ dotnet bin\hv86.dll --engine     :: движок в консоли, интерф
 dotnet bin\hv86.dll             :: менеджер
 ```
 
+## Управление из консоли
+
+Тот же движок, что и у менеджера, доступен из командной строки — через тот же
+named pipe, поэтому состояние всегда одно:
+
+```bat
+hv86 --cli status
+hv86 --cli list
+hv86 --cli create --name dev --preset tinycore --memory 256 --disk 256
+hv86 --cli start dev
+hv86 --cli snapshot dev before-update
+hv86 --cli snapshots dev
+hv86 --cli revert dev 0001-before-update
+hv86 --cli stop dev
+hv86 --cli export dev D:\backup\dev.hv86x
+hv86 --cli import D:\backup\dev.hv86x
+hv86 --cli diagnostics
+```
+
+`<vm>` — id, его префикс или имя. Флаг `--json` печатает машинный вывод для скриптов,
+коды возврата: `0` — успех, `1` — ошибка, `2` — неверные аргументы.
+
 ## Проверка
 
 ```powershell

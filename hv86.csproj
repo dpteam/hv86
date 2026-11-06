@@ -41,6 +41,8 @@
     <Version>0.1.0</Version>
     <FileVersion>0.1.0.0</FileVersion>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <!-- версия без git-хэша: хэш всё равно виден в диагностике -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>hv86</Product>
     <Company>DPT</Company>
     <Copyright>MIT. v86 (c) copy, BSD-2-Clause.</Copyright>

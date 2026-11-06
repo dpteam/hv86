@@ -137,6 +137,8 @@ snapshots/0001-Initial/
 ## 5. Протокол UI ↔ служба
 
 - Транспорт: `\\.\pipe\hv86` (JSON-RPC 2.0, построчный JSON), ACL: Administrators + Interactive.
+- Клиенты: окно менеджера, `hv86 --cli` (консоль/скрипты) — оба ходят одним и тем же путём,
+  поэтому состояние всегда одно и «кто прав» не бывает.
 - Методы: `vm.list/create/start/stop/pause/resume/reset/delete`, `vm.snapshot.*`,
   `vm.media.mount/eject`, `vm.console.attach`, `host.stats`, `log.tail`, `service.status`.
 - Push-события: `vm.state`, `vm.metrics`, `vm.log`, `ft.event`, `checkpoint.created`.
@@ -180,7 +182,7 @@ hv86.csproj          net9.0-windows, WinForms-шелл + WebView2, single-file p
 app.manifest         requireAdministrator
 AGENTS.md ROADMAP.md ARCHITECTURE.md README.md PROMPT.md
 src/App/             Program, ServiceHost, ServiceManager, ServiceRunner, MainForm,
-                     WebBridge, SelfTest, UnitTest, SmokeTest, IntegrationTest, Diagnostics
+                     WebBridge, Cli, SelfTest, UnitTest, SmokeTest, IntegrationTest, Diagnostics
 src/Core/            Paths, Json, AtomicFile, Log, Settings, SingleInstance, PipeServer,
                      PipeClient, ProcessJob, SessionLauncher, SelfHost, Brand, Resources
 src/Vm/              VmDefinition, VmStore, VmManager, VmProcess, CheckpointStore,

@@ -59,10 +59,12 @@
 ## M6 · Сеть, периферия, масштаб — частично
 - ✅ Проброс TCP host → guest (`127.0.0.1:2222 → guest:22`) через `tcp_probe/connect`;
   правила в настройках ВМ, применяются на лету, есть таймаут установки 30 с.
+- ✅ CLI `hv86 --cli ...`: list/status/start/stop/pause/resume/reset/console/delete,
+  снапшоты и откат, create/export/import, presets/log/diagnostics, флаг `--json`.
 - ⬜ Полноценный relay (`hv86-netd`): произвольный TCP/UDP наружу (fetch-backend
   умеет только HTTP), per-VM сети, UFW-подобные правила.
 - ⬜ 9p-шаренная папка (drag&drop файлов), буфер обмена, звук (SB16).
-- ⬜ Реплика на вторую машину (`replica-remote`), CLI `hv86ctl`, REST-опционально.
+- ⬜ Реплика на вторую машину (`replica-remote`), REST-опционально.
 - ⬜ Обновление v86 (пиннинг версий, миграция state), отчёт о совместимости гостей.
 
 ## Идеи на потом
