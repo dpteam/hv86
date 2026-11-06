@@ -46,9 +46,18 @@
     var acks = new Map();
     var tcpSessions = new Map();
 
-    var scaleMode = "1";          // "1" | "2" | "fit"
+    var scaleMode = storageGet("hv86.scale", "1");   // запоминаем на эту ВМ (свой профиль WebView2)
     var appliedScale = 1;
     var nativeSize = { w: 0, h: 0 };
+    var captured = false;
+
+    function storageGet(key, fallback) {
+        try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
+    }
+
+    function storageSet(key, value) {
+        try { localStorage.setItem(key, value); } catch (e) { /* хранилище недоступно */ }
+    }
 
     // --------------------------------------------------------------- шрифт текста
 
@@ -159,8 +168,84 @@
 
     function setScaleMode(mode) {
         scaleMode = mode;
+        storageSet("hv86.scale", mode);
         applyScale();
     }
+
+    // ------------------------------------------------------------ захват мыши
+
+    // v86 умеет захватывать указатель (pointer lock): только так гость
+    // получает относительные движения, не упираясь в края окна. Захват -
+    // по кнопке, выход - настраиваемый (по умолчанию F8+F12, как в 86box).
+    function captureMouse() {
+        if (!emu) return;
+
+        try {
+            if (emu.lock_mouse) emu.lock_mouse();
+            else document.body.requestPointerLock();
+        } catch (e) {
+            post({ action: "log", text: "захват мыши: " + (e && e.message || e) });
+        }
+    }
+
+    function releaseMouse() {
+        try { document.exitPointerLock(); } catch (e) { /* уже отпущено */ }
+    }
+
+    function captureHint() {
+        var mode = (config && config.captureRelease) || "f8f12";
+
+        if (mode === "middle") return "middle mouse button";
+        if (mode === "esc") return "Esc";
+        if (mode === "ctrlalt") return "Ctrl+Alt";
+
+        return "F8+F12";
+    }
+
+    function setCaptured(next) {
+        captured = next;
+
+        var button = document.querySelector("[data-cmd='capture']");
+        if (button) button.classList.toggle("on", next);
+
+        byId("foot-right").textContent = next
+            ? "mouse captured · release: " + captureHint()
+            : "";
+    }
+
+    // какой способ выхода выбран - решает настройка хоста
+    function isReleaseChord(event) {
+        var mode = (config && config.captureRelease) || "f8f12";
+
+        if (mode === "esc") return event.key === "Escape";
+        if (mode === "ctrlalt") return event.ctrlKey && event.altKey;
+        if (mode === "middle") return false;      // обрабатывается на mousedown
+
+        return event.key === "F8" || event.key === "F12";
+    }
+
+    document.addEventListener("keydown", function (event) {
+        if (!captured) return;
+        if (!isReleaseChord(event)) return;
+
+        event.preventDefault();
+        releaseMouse();
+    }, true);
+
+    document.addEventListener("mousedown", function (event) {
+        if (!captured) return;
+
+        var mode = (config && config.captureRelease) || "f8f12";
+
+        if (mode === "middle" && event.button === 1) {
+            event.preventDefault();
+            releaseMouse();
+        }
+    }, true);
+
+    document.addEventListener("pointerlockchange", function () {
+        setCaptured(!!document.pointerLockElement);
+    });
 
     // --------------------------------------------------------------- утилиты
 
@@ -689,6 +774,11 @@
                 case "scale-fit":
                     setScaleMode("fit");
                     break;
+
+                case "capture":
+                    if (captured) releaseMouse();
+                    else captureMouse();
+                    break;
             }
         } catch (e) {
             post({ action: "error", message: String(e && e.message || e) });
@@ -768,6 +858,7 @@
                         height: Math.round(rect.height),
                         font: style ? style.fontFamily : "",
                         fontSize: style ? style.fontSize : "",
+                        capture: (config && config.captureRelease) || "",
                         wrap: (function () {
                             var wrap = document.querySelector(".screen-wrap");
                             return wrap ? wrap.clientWidth + "x" + wrap.clientHeight : "";

@@ -321,6 +321,17 @@
         <div class="hint" data-i18n="host.textHint">Default for all VMs. A VM can override it in its own settings. Applied on the next console start.</div>
       </div>
 
+      <div class="field">
+        <label data-i18n="host.capture">Mouse capture release</label>
+        <select id="hostCapture">
+          <option value="f8f12">F8 + F12</option>
+          <option value="middle" data-i18n="host.captureMiddle">Middle mouse button</option>
+          <option value="esc">Esc</option>
+          <option value="ctrlalt">Ctrl + Alt</option>
+        </select>
+        <div class="hint" data-i18n="host.captureHint">Capture is started by the button in the console toolbar; this only chooses how to let go.</div>
+      </div>
+
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
         <button class="btn ghost" data-close="hostSettingsModal" data-i18n="btn.cancel">Cancel</button>
         <button class="btn primary" data-act="host.settings.save" data-i18n="btn.save">Save</button>

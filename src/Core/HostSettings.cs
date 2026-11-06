@@ -30,6 +30,27 @@ namespace Hv86.Core
             set { Set("text_font_size", (long)Math.Max(0, Math.Min(48, value))); }
         }
 
+        /// <summary>
+        /// Чем отпускать захват мыши в консоли: f8f12 (как в 86box), middle,
+        /// esc, ctrlalt. Захват только по кнопке - случайно не включается.
+        /// </summary>
+        public static string CaptureRelease
+        {
+            get { return NormalizeCapture(Get("capture_release", "f8f12") as string); }
+            set { Set("capture_release", NormalizeCapture(value)); }
+        }
+
+        public static string NormalizeCapture(string mode)
+        {
+            switch ((mode ?? "").Trim().ToLowerInvariant())
+            {
+                case "middle": return "middle";
+                case "esc": return "esc";
+                case "ctrlalt": return "ctrlalt";
+                default: return "f8f12";
+            }
+        }
+
         // ------------------------------------------------------------- хранение
 
         private static readonly object Gate = new object();
@@ -96,7 +117,10 @@ namespace Hv86.Core
 
         public static Dictionary<string, object> View()
         {
-            return Json.Obj("text_font", TextFont, "text_font_size", TextFontSize);
+            return Json.Obj(
+                "text_font", TextFont,
+                "text_font_size", TextFontSize,
+                "capture_release", CaptureRelease);
         }
 
         public static Dictionary<string, object> Apply(Dictionary<string, object> parameters)
@@ -107,6 +131,9 @@ namespace Hv86.Core
 
                 if (parameters.ContainsKey("text_font_size"))
                     TextFontSize = Json.GetInt(parameters, "text_font_size", 0);
+
+                if (parameters.ContainsKey("capture_release"))
+                    CaptureRelease = Json.GetString(parameters, "capture_release", "f8f12");
             }
 
             return View();

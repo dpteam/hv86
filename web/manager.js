@@ -462,6 +462,7 @@
 
         select.value = font;
         byId("hostTextSize").value = String(settings.text_font_size || 0);
+        byId("hostCapture").value = settings.capture_release || "f8f12";
 
         openModal("hostSettingsModal");
     }
@@ -470,7 +471,8 @@
         post({
             action: "host.settings.set",
             text_font: byId("hostTextFont").value,
-            text_font_size: Math.max(0, Number(byId("hostTextSize").value) || 0)
+            text_font_size: Math.max(0, Number(byId("hostTextSize").value) || 0),
+            capture_release: byId("hostCapture").value
         });
 
         closeModal("hostSettingsModal");

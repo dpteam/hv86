@@ -203,6 +203,12 @@ namespace Hv86.App
                 else
                     Fail("text font was not applied in the page: " + Json.Stringify(fontProbe));
 
+                // до страницы должна доехать настройка "чем отпускать мышь"
+                string capture = Json.GetString(fontProbe, "capture", "");
+
+                if (capture.Length > 0) Ok("mouse capture setting", "release chord: " + capture);
+                else Fail("capture release mode did not reach the console page: " + Json.Stringify(fontProbe));
+
                 Call(client, "vm.update", Json.Obj("id", id,
                     "text_font", "", "text_font_size", 0), 30000);
 

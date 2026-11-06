@@ -348,6 +348,13 @@ namespace Hv86.App
             HostSettings.TextFontSize = 999;
             Check(HostSettings.TextFontSize == 48, "host settings: huge size is clamped");
 
+            // способ выхода из захвата мыши: мусор приводится к дефолту
+            HostSettings.CaptureRelease = "middle";
+            Check(HostSettings.CaptureRelease == "middle", "host settings: capture release stored");
+
+            HostSettings.CaptureRelease = "нет такого";
+            Check(HostSettings.CaptureRelease == "f8f12", "host settings: bad capture mode falls back");
+
             HostSettings.TextFont = "";
             HostSettings.TextFontSize = 0;
         }

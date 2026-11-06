@@ -46,7 +46,6 @@ namespace Hv86.App
         private bool _webReady;
         private bool _pageReady;
         private bool _reallyClosing;
-        private bool _trayHintShown;
 
         public MainForm()
         {
@@ -76,6 +75,11 @@ namespace Hv86.App
             ContextMenuStrip menu = new ContextMenuStrip();
             menu.Items.Add("hv86", null, delegate { ShowWindow(); });
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Свернуть в трей", null, delegate
+            {
+                Hide();
+                ShowInTaskbar = false;
+            });
             menu.Items.Add("Exit", null, delegate { CloseForReal(); });
             _tray.ContextMenuStrip = menu;
             _tray.DoubleClick += delegate { ShowWindow(); };
@@ -898,23 +902,41 @@ namespace Hv86.App
         {
             if (_reallyClosing) return;
 
-            if (e.CloseReason == CloseReason.UserClosing)
+            // Крестик теперь закрывает приложение, а не прячет окно в трей:
+            // раньше первый клик прятал окно, и это выглядело как "надо
+            // закрывать дважды". Свернуть в трей - отдельный пункт меню.
+            if (e.CloseReason == CloseReason.UserClosing && _engine != null && RunningVms() > 0)
             {
-                e.Cancel = true;
-                Hide();
-                ShowInTaskbar = false;
+                DialogResult answer = MessageBox.Show(this,
+                    "ВМ работают внутри этого окна (портативный режим без службы).\r\n" +
+                    "Закрыть hv86 и остановить их? Диски сохранятся.",
+                    AppInfo.ProductName, MessageBoxButtons.OKCancel, MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2);
 
-                if (!_trayHintShown)
+                if (answer != DialogResult.OK)
                 {
-                    _trayHintShown = true;
-                    _tray.ShowBalloonTip(2000, AppInfo.ProductName,
-                        "hv86 продолжает работать в трее. ВМ не останавливаются.", ToolTipIcon.Info);
+                    e.Cancel = true;
+                    return;
                 }
-
-                return;
             }
 
             _reallyClosing = true;
+        }
+
+        /// <summary>Сколько ВМ реально работает (для подтверждения выхода).</summary>
+        private int RunningVms()
+        {
+            try
+            {
+                Dictionary<string, object> status = CallService("host.status", null, 2000)
+                    .GetAwaiter().GetResult() as Dictionary<string, object>;
+
+                return Json.GetInt(status, "vms_running", 0);
+            }
+            catch
+            {
+                return 0;
+            }
         }
 
         public void CloseForReal()

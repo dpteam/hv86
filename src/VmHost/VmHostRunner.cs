@@ -472,6 +472,7 @@ namespace Hv86.VmHost
 
             config["textFont"] = textFont ?? "";
             config["textSize"] = textSize;
+            config["captureRelease"] = HostSettings.CaptureRelease;
 
             // реплика стартует с загруженным state'ом и НЕ запускает CPU,
             // пока её не повысят
