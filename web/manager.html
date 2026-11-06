@@ -370,6 +370,19 @@
         <div class="hint" data-i18n="set.fwdHint">Listens on 127.0.0.1. The guest needs its network up (DHCP) before ports answer.</div>
       </div>
 
+      <div class="group-title" data-i18n="set.egress">Outbound traffic</div>
+
+      <div class="field">
+        <label data-i18n="set.egressMode">Policy (relay mode)</label>
+        <select id="setEgressMode">
+          <option value="any" data-i18n="set.egressAny">any — no restrictions</option>
+          <option value="safe" data-i18n="set.egressSafe">safe — internet only (no LAN / loopback)</option>
+          <option value="allowlist" data-i18n="set.egressList">allowlist — only the list below</option>
+        </select>
+        <textarea id="setEgressAllow" rows="3" spellcheck="false" placeholder="github.com&#10;10.0.0.0/8:22&#10;1.2.3.4:443"></textarea>
+        <div class="hint" data-i18n="set.egressHint">For net.mode=relay. One target per line: host, IP or CIDR, optionally :port. Matching uses resolved addresses, so a DNS name pointing at 127.0.0.1 does not slip through.</div>
+      </div>
+
       <div class="group-title" data-i18n="set.share">Shared folder</div>
 
       <div class="field">

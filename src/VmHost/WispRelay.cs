@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Hv86.Core;
+using Hv86.Vm;
 
 namespace Hv86.VmHost
 {
@@ -47,10 +48,29 @@ namespace Hv86.VmHost
         private CancellationTokenSource _cts;
         private readonly List<Connection> _connections = new List<Connection>();
         private readonly object _gate = new object();
+        private EgressPolicy _policy = new EgressPolicy();
         private bool _disposed;
         private int _handshakes;
 
         public int Port { get; private set; }
+
+        /// <summary>Политика исходящего трафика; null - без ограничений.</summary>
+        public WispRelay(EgressPolicy policy)
+        {
+            if (policy != null) _policy = policy;
+        }
+
+        public WispRelay() : this(null) { }
+
+        public void SetPolicy(EgressPolicy policy)
+        {
+            if (policy != null) _policy = policy;
+        }
+
+        public string PolicyDescribe()
+        {
+            return _policy.Describe();
+        }
 
         /// <summary>Сколько websocket-клиентов успешно подключилось (для диагностики).</summary>
         public int Handshakes { get { return Volatile.Read(ref _handshakes); } }
@@ -109,7 +129,9 @@ namespace Hv86.VmHost
                 client.NoDelay = true;
 
                 Connection connection = new Connection(client, token,
-                    () => Interlocked.Increment(ref _handshakes));
+                    () => Interlocked.Increment(ref _handshakes),
+                    (host, addresses, port) => _policy.IsAllowed(host, addresses, port),
+                    () => _policy.Describe());
 
                 lock (_gate) _connections.Add(connection);
 
@@ -164,23 +186,33 @@ namespace Hv86.VmHost
 
         // ------------------------------------------------------------ соединение
 
+        /// <summary>Соединение запрещено политикой egress (v86: CLOSE 0x48).</summary>
+        private sealed class BlockedException : Exception
+        {
+        }
+
         private sealed class Connection : IDisposable
         {
             private readonly TcpClient _client;
             private readonly NetworkStream _stream;
             private readonly CancellationToken _token;
             private readonly Action _relayHandshake;
+            private readonly Func<string, IList<IPAddress>, int, bool> _egress;
+            private readonly Func<string> _policyText;
             private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
             private readonly Dictionary<uint, StreamState> _streams = new Dictionary<uint, StreamState>();
             private readonly object _gate = new object();
             private bool _closed;
 
-            public Connection(TcpClient client, CancellationToken token, Action onHandshake)
+            public Connection(TcpClient client, CancellationToken token, Action onHandshake,
+                Func<string, IList<IPAddress>, int, bool> egress, Func<string> policyText)
             {
                 _client = client;
                 _stream = client.GetStream();
                 _token = token;
                 _relayHandshake = onHandshake;
+                _egress = egress;
+                _policyText = policyText;
             }
 
             public async Task RunAsync()
@@ -527,7 +559,40 @@ namespace Hv86.VmHost
                 if (streamType != StreamUdp)
                     _ = SendAsync(PacketContinue, id, UInt32(MaxBufferPackets));
 
-                _ = Task.Run(() => state.OpenAsync(_token));
+                _ = Task.Run(() => state.OpenAsync(_token, Resolver(host, port)));
+            }
+
+            /// <summary>
+            /// Разрешает имя и проверяет политику. Решаем по адресам, а не по
+            /// строке: иначе достаточно подсунуть DNS-запись, указывающую на
+            /// 127.0.0.1, чтобы обойти allowlist.
+            /// </summary>
+            private Func<CancellationToken, Task<IPAddress[]>> Resolver(string host, int port)
+            {
+                return async delegate (CancellationToken token)
+                {
+                    IPAddress[] addresses;
+
+                    try
+                    {
+                        Task<IPAddress[]> lookup = Dns.GetHostAddressesAsync(host);
+                        addresses = await lookup.WaitAsync(TimeSpan.FromSeconds(6), token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Info("NET", "relay: не удалось разрешить " + host + ": " + ex.Message);
+                        throw new SocketException((int)SocketError.HostNotFound);
+                    }
+
+                    if (!_egress(host, addresses, port))
+                    {
+                        Log.Info("NET", "relay: заблокировано политикой egress: " + host + ":" + port +
+                                        " (" + _policyText() + ")");
+                        throw new BlockedException();
+                    }
+
+                    return addresses;
+                };
             }
 
             private void CloseStream(uint id, byte reason)
@@ -603,7 +668,7 @@ namespace Hv86.VmHost
                 _close = close;
             }
 
-            public async Task OpenAsync(CancellationToken token)
+            public async Task OpenAsync(CancellationToken token, Func<CancellationToken, Task<IPAddress[]>> resolve)
             {
                 try
                 {
@@ -611,18 +676,28 @@ namespace Hv86.VmHost
                     {
                         timeout.CancelAfter(ConnectTimeoutMs);
 
+                        IPAddress[] addresses = await resolve(timeout.Token).ConfigureAwait(false);
+
+                        if (addresses == null || addresses.Length == 0)
+                            throw new SocketException((int)SocketError.HostNotFound);
+
                         if (_udp)
                         {
-                            _udpClient = new UdpClient();
-                            _udpClient.Connect(_host, _port);
+                            _udpClient = new UdpClient(addresses[0].AddressFamily);
+                            _udpClient.Connect(addresses[0], _port);
                         }
                         else
                         {
-                            _tcp = new TcpClient { NoDelay = true };
-                            await _tcp.ConnectAsync(_host, _port, timeout.Token).ConfigureAwait(false);
+                            _tcp = new TcpClient(addresses[0].AddressFamily) { NoDelay = true };
+                            await _tcp.ConnectAsync(addresses[0], _port, timeout.Token).ConfigureAwait(false);
                             _net = _tcp.GetStream();
                         }
                     }
+                }
+                catch (BlockedException)
+                {
+                    _close(0x48);
+                    return;
                 }
                 catch (Exception ex)
                 {

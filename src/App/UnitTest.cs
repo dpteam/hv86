@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Net;
 using System.Text;
 using Hv86.Core;
 using Hv86.Vm;
@@ -32,6 +33,7 @@ namespace Hv86.App
                 TestStateBlocks(dir);
                 TestPaths(dir);
                 TestAnsi();
+                TestEgress();
             }
             catch (Exception ex)
             {
@@ -168,6 +170,57 @@ namespace Hv86.App
             Check(runs.Count > 2 && runs[2].Foreground == AnsiText.DefaultForeground, "ansi: reset restores colour");
             Check(AnsiText.Strip("A\u001b[38;2;1;2;3mB\u001b[0m") == "AB", "ansi: strip");
             Check(AnsiText.Parse("\u001b[0m", 80).Count == 0, "ansi: empty line has no runs");
+        }
+
+        private static List<IPAddress> Addrs(params string[] items)
+        {
+            List<IPAddress> list = new List<IPAddress>();
+            foreach (string item in items) list.Add(IPAddress.Parse(item));
+            return list;
+        }
+
+        private static void TestEgress()
+        {
+            EgressPolicy safe = new EgressPolicy { Mode = EgressPolicy.ModeSafe };
+
+            Check(safe.IsAllowed("example.com", Addrs("8.8.8.8"), 443), "egress: safe allows internet");
+            Check(!safe.IsAllowed("localhost", Addrs("127.0.0.1"), 80), "egress: safe denies loopback");
+            Check(!safe.IsAllowed("nas.lan", Addrs("192.168.1.10"), 445), "egress: safe denies LAN");
+            Check(!safe.IsAllowed("intra", Addrs("10.1.2.3"), 22), "egress: safe denies 10/8");
+            Check(!safe.IsAllowed("intra", Addrs("172.20.1.1"), 22), "egress: safe denies 172.16/12");
+            Check(!safe.IsAllowed("metadata", Addrs("169.254.169.254"), 80), "egress: safe denies link-local");
+            Check(!safe.IsAllowed("cgnat", Addrs("100.64.0.1"), 22), "egress: safe denies CGNAT");
+            Check(!safe.IsAllowed("v6loop", Addrs("::1"), 80), "egress: safe denies IPv6 loopback");
+            Check(!safe.IsAllowed("mixed", Addrs("8.8.8.8", "127.0.0.1"), 443), "egress: safe denies when any address is private");
+
+            int dropped;
+
+            EgressPolicy list = new EgressPolicy { Mode = EgressPolicy.ModeAllowList };
+            list.Allow = EgressPolicy.ParseRules(new[]
+            {
+                "github.com", "10.0.0.0/8:22", "1.2.3.4:443", "*:8080"
+            }, out dropped);
+
+            Check(dropped == 0 && list.Allow.Count == 4, "egress: rules parsed");
+            Check(list.IsAllowed("github.com", Addrs("140.82.121.3"), 443), "egress: allowlist host");
+            Check(list.IsAllowed("api.github.com", Addrs("140.82.121.6"), 443), "egress: allowlist subdomain");
+            Check(!list.IsAllowed("example.com", Addrs("93.184.216.34"), 443), "egress: allowlist denies others");
+            Check(list.IsAllowed("intra", Addrs("10.9.8.7"), 22), "egress: allowlist CIDR + port");
+            Check(!list.IsAllowed("intra", Addrs("10.9.8.7"), 80), "egress: allowlist respects port");
+            Check(list.IsAllowed("x", Addrs("1.2.3.4"), 443), "egress: allowlist exact IP");
+            Check(!list.IsAllowed("x", Addrs("1.2.3.5"), 443), "egress: allowlist other IP");
+            Check(list.IsAllowed("anything.example", Addrs("8.8.4.4"), 8080), "egress: wildcard host with port");
+            Check(!list.IsAllowed("anything.example", Addrs("8.8.4.4"), 8081), "egress: wildcard respects port");
+
+            EgressPolicy empty = new EgressPolicy { Mode = EgressPolicy.ModeAllowList };
+            Check(!empty.IsAllowed("example.com", Addrs("8.8.8.8"), 443), "egress: empty allowlist denies");
+
+            int bad;
+            EgressPolicy.ParseRules(new[] { "host:", "1.2.3.4/99", "", "http://x", "ok.example" }, out bad);
+            Check(bad == 4, "egress: invalid rules dropped");
+
+            Check(EgressPolicy.NormalizeMode("SAFE") == EgressPolicy.ModeSafe, "egress: mode normalization");
+            Check(new EgressPolicy().IsAllowed("anywhere", Addrs("127.0.0.1"), 1), "egress: default mode is unrestricted");
         }
 
         private static void Check(bool ok, string what)

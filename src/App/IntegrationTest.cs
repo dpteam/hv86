@@ -203,6 +203,18 @@ namespace Hv86.App
                     if (relayOk) Ok("wisp relay TCP", relayDetail);
                     else Fail("wisp relay: " + relayDetail);
 
+                    // ---- правила исходящего трафика: safe обязан отрезать loopback
+                    Call(client, "vm.update", Json.Obj("id", id, "egress_mode", "safe"), 30000);
+                    System.Threading.Thread.Sleep(400);
+
+                    string blockedDetail;
+                    bool blockedOk = WispTestClient.Echo(relayPort, echoPort, "hv86-relay", out blockedDetail);
+
+                    if (!blockedOk && blockedDetail.IndexOf("0x48", StringComparison.OrdinalIgnoreCase) >= 0)
+                        Ok("egress policy", "safe mode blocked loopback (" + blockedDetail + ")");
+                    else
+                        Fail("egress policy did not block loopback: " + blockedDetail);
+
                     try { echo.Stop(); } catch { }
                 }
 

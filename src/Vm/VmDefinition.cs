@@ -47,6 +47,10 @@ namespace Hv86.Vm
         public string ShareTag = "host9p";
         public bool ShareReadOnly = true;
 
+        /// <summary>Политика исходящего трафика для wisp-релея.</summary>
+        public string EgressMode = EgressPolicy.ModeAny;
+        public List<string> EgressAllow = new List<string>();
+
         public bool Autostart;
 
         // Динамическая отказоустойчивость
@@ -127,6 +131,15 @@ namespace Hv86.Vm
                         "readonly", ShareReadOnly);
                 }
 
+                if (EgressMode != EgressPolicy.ModeAny || (EgressAllow != null && EgressAllow.Count > 0))
+                {
+                    List<object> allow = new List<object>();
+                    if (EgressAllow != null)
+                        foreach (string item in EgressAllow) allow.Add(item);
+
+                    netBlock["egress"] = Json.Obj("mode", EgressMode, "allow", allow);
+                }
+
                 return Json.Obj(
                     "id", Id,
                     "name", Name,
@@ -180,6 +193,23 @@ namespace Hv86.Vm
                 int dropped;
                 vm.Forwards = ForwardRule.ParseList(forwards, out dropped);
                 if (dropped > 0) Log.Warn("VM", "отброшено некорректных правил проброса: " + dropped);
+
+                Dictionary<string, object> egress = Json.GetObject(net, "egress");
+                if (egress != null)
+                {
+                    vm.EgressMode = EgressPolicy.NormalizeMode(Json.GetString(egress, "mode", EgressPolicy.ModeAny));
+
+                    List<object> allow = Json.GetList(egress, "allow");
+                    List<string> items = new List<string>();
+
+                    if (allow != null)
+                        foreach (object item in allow)
+                            if (item is string text) items.Add(text);
+
+                    List<EgressRule> rules = EgressPolicy.ParseRules(items, out dropped);
+                    vm.EgressAllow = new List<string>();
+                    foreach (EgressRule rule in rules) vm.EgressAllow.Add(rule.Text);
+                }
             }
 
             vm.BootOrder = Json.GetString(map, "boot_order", "auto");
@@ -231,6 +261,8 @@ namespace Hv86.Vm
                 "net_mode", NetMode,
                 "share_path", SharePath,
                 "share_readonly", ShareReadOnly,
+                "egress_mode", EgressMode,
+                "egress_allow", ViewAllow(),
                 "ft_mode", FtMode,
                 "restart", Restart,
                 "interval_ms", FtIntervalMs,
@@ -257,6 +289,15 @@ namespace Hv86.Vm
             if (Forwards == null) return list;
 
             foreach (ForwardRule rule in Forwards) list.Add(rule.ToDict());
+            return list;
+        }
+
+        private List<object> ViewAllow()
+        {
+            List<object> list = new List<object>();
+            if (EgressAllow == null) return list;
+
+            foreach (string item in EgressAllow) list.Add(item);
             return list;
         }
 

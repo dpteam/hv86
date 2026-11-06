@@ -280,6 +280,13 @@ table.vm .name { font-weight: 600; }
 .field .row { display: flex; gap: 8px; }
 .field .row input { flex: 1 1 auto; }
 .field .hint { color: var(--text-3); font-size: 11px; margin-top: 4px; }
+.field textarea {
+  width: 100%; padding: 6px 9px; border-radius: 6px;
+  border: 1px solid var(--line-2); background: #0a1017; color: var(--text);
+  font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  outline: none; resize: vertical; margin-top: 6px;
+}
+.field textarea:focus { border-color: var(--accent-2); }
 .field .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
 .check { display: flex; align-items: center; gap: 8px; color: var(--text-2); }

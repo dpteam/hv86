@@ -220,6 +220,7 @@ namespace Hv86.Vm
             vm.NetMode = Json.GetString(parameters, "net_mode", "nat") == "relay" ? "relay" : "nat";
 
             ApplyShare(vm, parameters);
+            ApplyEgress(vm, parameters);
             vm.BootOrder = preset == null ? "auto" : Json.GetString(preset, "boot", "auto");
             vm.HdaFile = null;
             vm.CdromFile = null;
@@ -698,6 +699,7 @@ namespace Hv86.Vm
                 }
 
                 ApplyShare(def, parameters);
+                ApplyEgress(def, parameters);
 
                 runtime.NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, def.FtIntervalMs));
 
@@ -711,7 +713,7 @@ namespace Hv86.Vm
                 List<object> rules = new List<object>();
                 foreach (ForwardRule rule in runtime.Def.Forwards) rules.Add(rule.ToDict());
 
-                _ = Task.Run(async () =>
+               _ = Task.Run(async () =>
                 {
                     try
                     {
@@ -721,6 +723,24 @@ namespace Hv86.Vm
                     catch (Exception ex)
                     {
                         Log.Warn("VM", "применение проброса: " + ex.Message);
+                    }
+                });
+
+                List<object> allow = new List<object>();
+                foreach (string item in runtime.Def.EgressAllow) allow.Add(item);
+
+                string egressMode = runtime.Def.EgressMode;
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await runtime.Proc.Client.CallForResultAsync("vm.egress",
+                            Json.Obj("mode", egressMode, "allow", allow), 15000).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("VM", "применение политики egress: " + ex.Message);
                     }
                 });
             }
@@ -1127,6 +1147,30 @@ namespace Hv86.Vm
             vm.SharePath = full;
             vm.ShareTag = "host9p";
             vm.ShareReadOnly = Json.GetBool(parameters, "share_readonly", vm.ShareReadOnly);
+        }
+
+        private static void ApplyEgress(VmDefinition vm, Dictionary<string, object> parameters)
+        {
+            if (parameters.ContainsKey("egress_mode"))
+                vm.EgressMode = EgressPolicy.NormalizeMode(Json.GetString(parameters, "egress_mode", vm.EgressMode));
+
+            if (parameters.ContainsKey("egress_allow"))
+            {
+                List<object> raw = Json.GetList(parameters, "egress_allow");
+                List<string> items = new List<string>();
+
+                if (raw != null)
+                    foreach (object item in raw)
+                        if (item is string text) items.Add(text);
+
+                int dropped;
+                List<EgressRule> rules = EgressPolicy.ParseRules(items, out dropped);
+
+                vm.EgressAllow = new List<string>();
+                foreach (EgressRule rule in rules) vm.EgressAllow.Add(rule.Text);
+
+                if (dropped > 0) Log.Warn("VM", "egress: отброшено правил " + dropped);
+            }
         }
 
         private static void TryDelete(string path)

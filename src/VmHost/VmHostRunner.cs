@@ -147,13 +147,17 @@ namespace Hv86.VmHost
                 // включён, иначе остаётся fetch (HTTP + проброс портов)
                 if (_vm.NetMode == "relay")
                 {
-                    _relay = new WispRelay();
+                    _relay = new WispRelay(BuildEgressPolicy(_vm));
 
                     string relayError;
                     if (!_relay.Start(out relayError))
                     {
                         Log.Warn("NET", "wisp relay не поднялся, остаётся fetch: " + relayError);
                         _relay = null;
+                    }
+                    else
+                    {
+                        Log.Info("NET", _relay.PolicyDescribe());
                     }
                 }
 
@@ -345,6 +349,20 @@ namespace Hv86.VmHost
                 config["initialState"] = VmResourceServer.Origin + "/state/restore.bin";
 
             return config;
+        }
+
+        /// <summary>Политика egress из vm.json; по умолчанию - без ограничений.</summary>
+        private static EgressPolicy BuildEgressPolicy(VmDefinition vm)
+        {
+            EgressPolicy policy = new EgressPolicy();
+            policy.Mode = EgressPolicy.NormalizeMode(vm.EgressMode);
+
+            int dropped;
+            policy.Allow = EgressPolicy.ParseRules(vm.EgressAllow ?? new List<string>(), out dropped);
+
+            if (dropped > 0) Log.Warn("NET", "egress: отброшено правил " + dropped);
+
+            return policy;
         }
 
         private static Dictionary<string, object> MediaDescriptor(string path)
@@ -669,6 +687,26 @@ namespace Hv86.VmHost
                     _vm.Forwards = rules;
 
                     return Json.Obj("count", rules.Count, "dropped", dropped);
+                }
+
+                case "vm.egress":
+                {
+                    EgressPolicy policy = new EgressPolicy();
+                    policy.Mode = EgressPolicy.NormalizeMode(Json.GetString(parameters, "mode", EgressPolicy.ModeAny));
+
+                    List<object> allow = Json.GetList(parameters, "allow");
+                    List<string> items = new List<string>();
+
+                    if (allow != null)
+                        foreach (object item in allow)
+                            if (item is string text) items.Add(text);
+
+                    int dropped;
+                    policy.Allow = EgressPolicy.ParseRules(items, out dropped);
+
+                    _relay?.SetPolicy(policy);
+
+                    return Json.Obj("mode", policy.Mode, "rules", policy.Allow.Count, "dropped", dropped);
                 }
 
                 case "vm.eject":

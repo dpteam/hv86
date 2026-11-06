@@ -73,7 +73,9 @@
   Протокол проверяется своим клиентом (`node engine/test-9p.mjs`) из `--htest`.
 - ✅ CLI `hv86 --cli ...`: list/status/start/stop/pause/resume/reset/console/delete,
   снапшоты и откат, create/export/import, presets/log/diagnostics, флаг `--json`.
-- ⬜ Per-VM сети и правила исходящего трафика (что гостю можно наружу).
+- ✅ Правила исходящего трафика для релея: `any` / `safe` (без LAN и localhost) /
+  `allowlist`; решение по разрешённым адресам, отказ гостю — `CLOSE(0x48)`.
+- ⬜ Правила для `fetch`-backend (в браузере своей точки решения нет).
 - ⬜ Буфер обмена, звук (SB16), 9p для web-движка.
 - ⬜ Реплика на вторую машину (`replica-remote`), REST-опционально.
 - ⬜ Обновление v86 (пиннинг версий, миграция state), отчёт о совместимости гостей.

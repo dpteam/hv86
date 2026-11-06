@@ -114,6 +114,29 @@ WebSocket на 127.0.0.1 со случайным портом, пакеты `CON
 - Ограничения релея: 128 потоков на соединение, буфер 4 МБ на поток,
   таймаут установки 12 с, ответы об ошибках по кодам протокола (0x41–0x49).
 
+#### Правила исходящего трафика (egress)
+
+Релей открывает TCP от имени гостя, поэтому без правил это дыра: гость достанет
+`localhost` хоста, его LAN и админские порты. Политика — в `vm.json`:
+`net.egress {mode, allow}`.
+
+| режим | что разрешено |
+|---|---|
+| `any` (по умолчанию) | всё — поведение до появления правил |
+| `safe` | только интернет: loopback, 10/8, 172.16/12, 192.168/16, 169.254/16, 100.64/10, multicast и IPv6 ULA запрещены |
+| `allowlist` | только перечисленное; пустой список = запрет всего |
+
+Записи списка: `host`, `host:port`, `1.2.3.4`, `10.0.0.0/8`, `10.0.0.0/8:22`,
+`*`, `*:443`. Максимум 64 правила.
+
+Важно: решение принимается по **разрешённым адресам**, а не по строке имени
+(`EgressPolicy.IsAllowed(host, addresses, port)`). DNS-имя, указывающее на
+`127.0.0.1`, не пролезет; если у имени несколько адресов и хоть один приватный —
+соединение не открываем. Отказ гостю приходит как `CLOSE(0x48)`.
+
+Политика применяется к релею (`net.mode=relay`); `fetch`-backend браузера
+ограничить нельзя — там нет нашей точки принятия решения.
+
 ## 2a. Движки: web и headless
 
 Одна и та же ВМ может исполняться двумя разными процессами, и для службы
@@ -238,7 +261,7 @@ src/Core/            Paths, Json, AtomicFile, Log, Settings, SingleInstance, Pip
                      PipeClient, ProcessJob, SessionLauncher, SelfHost, NodeRuntime,
                      Brand, Resources
 src/Vm/              VmDefinition, VmStore, VmManager, VmProcess, CheckpointStore,
-                     PresetCatalog, V86State, V86Assets, VmArchive, ForwardRule
+                     PresetCatalog, V86State, V86Assets, VmArchive, ForwardRule, EgressPolicy
 src/VmHost/          VmHostForm, VmHostRunner, VmResourceServer, PortForwarder, WispRelay
 web/                 manager.html, manager.js, console.html, console.js, theme.css, i18n/
 engine/              vmhost.mjs (Node), fs9p.mjs (9p-сервер), test-9p.mjs,

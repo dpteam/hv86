@@ -369,6 +369,8 @@
         byId("setNetMode").value = vm.net_mode === "relay" ? "relay" : "nat";
         byId("setSharePath").value = vm.share_path || "";
         byId("setShareReadOnly").checked = vm.share_readonly !== false;
+        byId("setEgressMode").value = vm.egress_mode === "safe" ? "safe" : (vm.egress_mode === "allowlist" ? "allowlist" : "any");
+        byId("setEgressAllow").value = (vm.egress_allow || []).join("\n");
 
         byId("setFtMode").value = vm.ft_mode === "checkpoint" ? "checkpoint" : "off";
         byId("setInterval").value = Math.max(2, Math.round((vm.interval_ms || 15000) / 1000));
@@ -472,6 +474,8 @@
             engine: byId("setEngine").value,
             share_path: byId("setSharePath").value,
             share_readonly: byId("setShareReadOnly").checked,
+            egress_mode: byId("setEgressMode").value,
+            egress_allow: byId("setEgressAllow").value.split("\n").map(function (line) { return line.trim(); }).filter(function (line) { return line.length > 0; }),
             forwards: state.fwdDraft
         });
 
