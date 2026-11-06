@@ -25,3 +25,6 @@ assets/hv86-256.png
 # CI/locally packed release archives
 hv86-*-win-x64.zip
 checksums.txt
+
+# crawler cache (tools/old-dos-crawl.mjs): сырые страницы old-dos.ru
+.old-dos-cache/

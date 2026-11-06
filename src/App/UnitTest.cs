@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Text;
 using Hv86.Core;
@@ -37,6 +38,7 @@ namespace Hv86.App
                 TestEgress();
                 TestEgressGate();
                 TestPresets();
+                TestImagePack(dir);
                 TestShare(dir);
             }
             catch (Exception ex)
@@ -278,7 +280,7 @@ namespace Hv86.App
 
             HashSet<string> ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            int ownCount = 0, copyCount = 0, bad = 0;
+            int ownCount = 0, copyCount = 0, oldCount = 0, bad = 0;
             bool ownHashed = true;
 
             foreach (Dictionary<string, object> preset in presets)
@@ -298,10 +300,15 @@ namespace Hv86.App
                 {
                     copyCount++;
                 }
+                else if (source == "old-dos.ru")
+                {
+                    oldCount++;
+                }
                 else
                 {
                     ownCount++;
 
+                    // у своих хэш обязателен: это единственная защита от подмены
                     if (Json.GetString(preset, "sha256", "").Length != 64) ownHashed = false;
                 }
             }
@@ -309,8 +316,85 @@ namespace Hv86.App
             Check(presets.Count > 100, "presets: catalog size (" + presets.Count + " entries)");
             Check(bad == 0, "presets: ids and fields (" + bad + " invalid)");
             Check(ownCount >= 5 && copyCount > 100,
-                "presets: two catalogs (" + ownCount + " own + " + copyCount + " copy.sh)");
+                "presets: catalogs (" + ownCount + " own + " + copyCount + " copy.sh + " +
+                oldCount + " old-dos)");
+            Check(oldCount > 0, "presets: old-dos catalog is loaded (" + oldCount + ")");
             Check(ownHashed, "presets: own entries are hash-pinned");
+        }
+
+        /// <summary>
+        /// Каталоги старых ОС отдают образы в ZIP (а иногда в RAR/7z).
+        /// Проверяем распознавание по сигнатуре и распаковку образа.
+        /// </summary>
+        private static void TestImagePack(string dir)
+        {
+            string pack = Path.Combine(dir, "pack");
+            Directory.CreateDirectory(pack);
+
+            // 1. ZIP с одним образом внутри (1.44M флоппи)
+            string floppy = Path.Combine(pack, "disk.img");
+            File.WriteAllBytes(floppy, new byte[1474560]);
+
+            string zipPath = Path.Combine(pack, "dos.zip");
+
+            using (System.IO.Compression.ZipArchive zip =
+                   System.IO.Compression.ZipFile.Open(zipPath, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                zip.CreateEntryFromFile(floppy, "disk.img");
+
+                using (StreamWriter writer = new StreamWriter(zip.CreateEntry("readme.txt").Open()))
+                    writer.Write("hi");
+            }
+
+            Check(ImagePack.Detect(zipPath) == ImagePack.KindZip, "pack: zip detected");
+
+            string unpacked = ImagePack.Unwrap(zipPath);
+            Check(File.Exists(unpacked) && new FileInfo(unpacked).Length == 1474560,
+                "pack: image extracted from zip");
+
+            // 2. ZIP с двумя образами - непонятно, какой брать
+            string twoPath = Path.Combine(pack, "two.zip");
+
+            using (System.IO.Compression.ZipArchive zip =
+                   System.IO.Compression.ZipFile.Open(twoPath, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                zip.CreateEntryFromFile(floppy, "a.img");
+                zip.CreateEntryFromFile(floppy, "b.img");
+            }
+
+            bool refused = false;
+            try { ImagePack.Unwrap(twoPath); }
+            catch (Hv86Exception) { refused = true; }
+
+            Check(refused, "pack: two images are refused");
+
+            // 3. RAR: сигнатура есть, распаковщика нет - честный отказ
+            string rarPath = Path.Combine(pack, "old.rar");
+            byte[] rar = new byte[64];
+            rar[0] = (byte)'R'; rar[1] = (byte)'a'; rar[2] = (byte)'r'; rar[3] = (byte)'!';
+            File.WriteAllBytes(rarPath, rar);
+
+            Check(ImagePack.Detect(rarPath) == ImagePack.KindRar, "pack: rar detected");
+
+            refused = false;
+            try { ImagePack.Unwrap(rarPath); }
+            catch (Hv86Exception) { refused = true; }
+
+            Check(refused, "pack: rar is refused with a message");
+
+            // 4. ISO: сигнатура CD001 по смещению 0x8001
+            string isoPath = Path.Combine(pack, "cd.iso");
+            byte[] iso = new byte[0x8000 + 16];
+            iso[0x8001] = (byte)'C'; iso[0x8002] = (byte)'D'; iso[0x8003] = (byte)'0';
+            iso[0x8004] = (byte)'0'; iso[0x8005] = (byte)'1';
+            File.WriteAllBytes(isoPath, iso);
+
+            Check(ImagePack.Detect(isoPath) == ImagePack.KindIso, "pack: iso detected");
+            Check(ImagePack.Unwrap(isoPath) == isoPath, "pack: iso is used as is");
+
+            // 5. Обычный образ - как есть
+            Check(ImagePack.Detect(floppy) == ImagePack.KindRaw &&
+                  ImagePack.Unwrap(floppy) == floppy, "pack: raw image is used as is");
         }
 
         private static void TestShare(string dir)

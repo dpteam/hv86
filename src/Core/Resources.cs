@@ -28,6 +28,9 @@ namespace Hv86.Core
         /// <summary>Каталог образов с copy.sh/v86 (генерируется tools\import-copy-sh.ps1).</summary>
         public const string PresetsCopy = "Hv86.Assets.presets-copy.json";
 
+        /// <summary>Отобранные образы с old-dos.ru (tools\old-dos-select.mjs).</summary>
+        public const string PresetsOldDos = "Hv86.Assets.presets-olddos.json";
+
         /// <summary>Читает текстовый ресурс. Нет ресурса - пустая строка, не null.</summary>
         public static string Text(string logicalName)
         {

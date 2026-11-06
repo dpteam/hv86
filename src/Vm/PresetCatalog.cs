@@ -26,6 +26,7 @@ namespace Hv86.Vm
 
             Append(result, Resources.Presets, null);
             Append(result, Resources.PresetsCopy, "copy.sh");
+            Append(result, Resources.PresetsOldDos, "old-dos.ru");
 
             return result;
         }
@@ -115,7 +116,7 @@ namespace Hv86.Vm
             {
                 if (!string.IsNullOrEmpty(expected))
                 {
-                    if (Matches(path, expected)) return path;
+                    if (Matches(path, expected)) return ImagePack.Unwrap(path);
 
                     Log.Warn("PRESET", "хэш кэша не совпал, качаю заново: " + fileName);
                     try { File.Delete(path); } catch { }
@@ -125,7 +126,7 @@ namespace Hv86.Vm
                     string pinned = ReadPinned(path);
 
                     // хэш закрепили при первой загрузке - дальше сверяем его
-                    if (pinned.Length == 0 || Matches(path, pinned)) return path;
+                    if (pinned.Length == 0 || Matches(path, pinned)) return ImagePack.Unwrap(path);
 
                     Log.Warn("PRESET", "образ изменился с первой загрузки, качаю заново: " + fileName);
                     try { File.Delete(path); } catch { }
@@ -164,7 +165,10 @@ namespace Hv86.Vm
 
                 AtomicFile.Move(temp, path);
                 Log.Info("PRESET", "образ готов: " + path);
-                return path;
+
+                // старые каталоги отдают ZIP с образом внутри: распаковываем,
+                // иначе ВМ получит архив вместо диска и не загрузится
+                return ImagePack.Unwrap(path);
             }
             catch (Hv86Exception)
             {

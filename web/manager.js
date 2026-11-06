@@ -351,17 +351,25 @@
         var copy = document.createElement("optgroup");
         copy.label = T("new.sourceCopy");
 
+        var old = document.createElement("optgroup");
+        old.label = T("new.sourceOldDos");
+
         for (var i = 0; i < state.presets.length; i++) {
             var preset = state.presets[i];
             var option = document.createElement("option");
             option.value = preset.id;
             option.textContent = preset.name + (preset.size ? " · " + fmtSize(preset.size) : "");
 
-            (preset.source === "copy.sh" ? copy : own).appendChild(option);
+            var group = preset.source === "copy.sh" ? copy
+                      : preset.source === "old-dos.ru" ? old
+                      : own;
+
+            group.appendChild(option);
         }
 
         if (own.childNodes.length) select.appendChild(own);
         if (copy.childNodes.length) select.appendChild(copy);
+        if (old.childNodes.length) select.appendChild(old);
     }
 
     function applyPreset() {
@@ -373,7 +381,9 @@
         }
 
         byId("newPresetHint").textContent = preset
-            ? (preset.description || "") + (preset.source === "copy.sh" ? " " + T("new.copyNote") : "")
+            ? (preset.description || "") +
+              (preset.source === "copy.sh" ? " " + T("new.copyNote") : "") +
+              (preset.source === "old-dos.ru" ? " " + T("new.oldDosNote") : "")
             : T("new.noPresetHint");
 
         if (!preset) return;

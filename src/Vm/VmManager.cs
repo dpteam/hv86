@@ -263,8 +263,13 @@ namespace Hv86.Vm
             {
                 if (presetFile != null)
                 {
-                    string ext = Path.GetExtension(presetFile);
-                    if (string.IsNullOrEmpty(ext)) ext = ".img";
+                    string ext = Path.GetExtension(presetFile).ToLowerInvariant();
+
+                    // каталоги отдают файлы через dl.php?id=... - расширение
+                    // в пути ничего не значит, ориентируемся на сигнатуру
+                    if (ext != ".img" && ext != ".iso" && ext != ".ima" && ext != ".flp" &&
+                        ext != ".vfd" && ext != ".dsk" && ext != ".raw" && ext != ".bin" && ext != ".hdd")
+                        ext = ImagePack.Detect(presetFile) == ImagePack.KindIso ? ".iso" : ".img";
 
                     if (kind == "fda")
                     {

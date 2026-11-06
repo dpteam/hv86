@@ -1,0 +1,91 @@
+{
+ "version": 1,
+ "source": "http://old-dos.ru/",
+ "note": "Отобрано вручную из инвентаря old-dos.ru и проверено по сигнатуре (tools/old-dos-scan.mjs): в каждом файле ровно один образ. Образы в поставку не входят - скачиваются по dl.php, ZIP распаковывается на месте.",
+ "presets": [
+  {
+   "id": "olddos-pcdos110",
+   "name": "IBM PC DOS 1.10 (1982)",
+   "kind": "fda",
+   "url": "http://old-dos.ru/dl.php?id=3687",
+   "size": 75782,
+   "sha256": "",
+   "memory_mb": 32,
+   "vga_memory_mb": 8,
+   "disk_mb": 0,
+   "boot": "FLOPPY_CD_HARDDISK",
+   "net": "ne2k",
+   "description": "PC DOS 1.10 на дискете 160K, 1982. Грузится, спрашивает дату. · old-dos.ru · zip · 160K"
+  },
+  {
+   "id": "olddos-msdos401",
+   "name": "MS-DOS 4.01 (boot disk, 1989)",
+   "kind": "fda",
+   "url": "http://old-dos.ru/dl.php?id=4029",
+   "size": 121634,
+   "sha256": "",
+   "memory_mb": 32,
+   "vga_memory_mb": 8,
+   "disk_mb": 0,
+   "boot": "FLOPPY_CD_HARDDISK",
+   "net": "ne2k",
+   "description": "Загрузочная дискета MS-DOS 4.01, апрель 1989. · old-dos.ru · zip · 1440K"
+  },
+  {
+   "id": "olddos-cpm86",
+   "name": "CP/M-86 1.0 (1982)",
+   "kind": "fda",
+   "url": "http://old-dos.ru/dl.php?id=13779",
+   "size": 91958,
+   "sha256": "",
+   "memory_mb": 32,
+   "vga_memory_mb": 8,
+   "disk_mb": 0,
+   "boot": "FLOPPY_CD_HARDDISK",
+   "net": "ne2k",
+   "description": "CP/M-86 1.0 на дискете 160K, 1982: загружается до приглашения A>. · old-dos.ru · zip · 160K"
+  },
+  {
+   "id": "olddos-venix",
+   "name": "Venix/86 2.1 (1984)",
+   "kind": "fda",
+   "url": "http://old-dos.ru/dl.php?id=13318",
+   "size": 104688,
+   "sha256": "",
+   "memory_mb": 32,
+   "vga_memory_mb": 8,
+   "disk_mb": 0,
+   "boot": "FLOPPY_CD_HARDDISK",
+   "net": "ne2k",
+   "description": "Venix/86 2.1 - Unix для PC от VenturCom, 1984. · old-dos.ru · zip · 360K"
+  },
+  {
+   "id": "olddos-dosc",
+   "name": "DOS-C 0.90 (1995)",
+   "kind": "fda",
+   "url": "http://old-dos.ru/dl.php?id=39065",
+   "size": 81322,
+   "sha256": "",
+   "memory_mb": 32,
+   "vga_memory_mb": 8,
+   "disk_mb": 0,
+   "boot": "FLOPPY_CD_HARDDISK",
+   "net": "ne2k",
+   "description": "DOS-C 0.90 - свободная реализация DOS; грузится до A:\\>. · old-dos.ru · zip · 1440K"
+  },
+  {
+   "id": "olddos-retrounix",
+   "name": "Retro UNIX 386 1.1",
+   "kind": "fda",
+   "url": "http://old-dos.ru/dl.php?id=13472",
+   "size": 52520,
+   "sha256": "",
+   "memory_mb": 32,
+   "vga_memory_mb": 8,
+   "disk_mb": 0,
+   "boot": "FLOPPY_CD_HARDDISK",
+   "net": "ne2k",
+   "description": "Retro UNIX 386 v1 - Unix для 8086/386, грузится до приглашения Boot:. · old-dos.ru · zip · 1440K"
+  }
+ ]
+}

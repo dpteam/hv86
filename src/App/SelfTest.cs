@@ -73,14 +73,17 @@ namespace Hv86.App
             {
                 string id = Json.GetString(preset, "id", "");
                 string hash = Json.GetString(preset, "sha256", "");
-                bool copy = Json.GetString(preset, "source", "") == "copy.sh";
+                string source = Json.GetString(preset, "source", "");
 
-                // у каталога copy.sh хэшей нет: они закрепляются при первой
-                // загрузке (PresetCatalog.PinHash), у своих - обязательны
-                bool ok = id.Length > 0 && (copy ? hash.Length == 0 || hash.Length == 64 : hash.Length == 64);
+                // у чужих каталогов (copy.sh, old-dos.ru) хэшей нет: они
+                // закрепляются при первой загрузке (PresetCatalog.PinHash),
+                // у своих - обязательны
+                bool own = source.Length == 0;
+                bool ok = id.Length > 0 && (!own || hash.Length == 64);
 
                 Check(ok, "preset " + id,
-                    copy ? "copy.sh, hash pinned on first download" : (hash.Length == 64 ? "sha256 ok" : "no sha256"));
+                    own ? (hash.Length == 64 ? "sha256 ok" : "no sha256")
+                        : source + ", hash pinned on first download");
             }
 
             // ---- WebView2 runtime

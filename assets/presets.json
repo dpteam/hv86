@@ -66,6 +66,19 @@
       "disk_mb": 256,
       "boot": "CD_HARDDISK_FLOPPY",
       "description": "Small Linux ISO used by the v86 project for its own tests."
+    },
+    {
+      "id": "elks",
+      "name": "ELKS 0.9.2 (Linux for 8086)",
+      "kind": "fda",
+      "url": "https://github.com/ghaerr/elks/releases/download/v0.9.2/fd1440.img",
+      "size": 1474560,
+      "sha256": "bb4e3ac26f2a40352a5949a447fb7391ee4f1cb7ad80269d691f522c82a189a4",
+      "memory_mb": 32,
+      "vga_memory_mb": 4,
+      "disk_mb": 0,
+      "boot": "FLOPPY_CD_HARDDISK",
+      "description": "ELKS 0.9.2 - Embeddable Linux Kernel Subset: Linux-подобная ОС для 8086/8088, целиком на дискете 1.44M."
     }
   ]
 }
