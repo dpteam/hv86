@@ -52,20 +52,24 @@
 
     // ---------------------------------------------------------------- масштаб
 
-    // Масштабируем через сам v86 (screen_set_scale): он же пересчитывает
-    // координаты мыши. Своим CSS-transform пришлось бы дублировать его математику.
+    // Масштабируем через CSS `zoom`, а не через screen_set_scale и не через
+    // transform. Причина: v86 для текстового режима ставит transform, а
+    // transform НЕ меняет layout - контейнер остаётся прежним, flex-центрирование
+    // врёт, и увеличенный экран обрезается по краям. `zoom` меняет layout, так
+    // что и центрирование, и прокрутка остаются честными.
     function applyScale() {
-        if (!emu) return;
-
+        var cont = byId("screen_container");
         var wrap = document.querySelector(".screen-wrap");
-        if (!wrap) return;
+
+        if (!cont || !wrap) return;
 
         var k = 1;
 
         if (scaleMode === "fit") {
             if (nativeSize.w > 0 && nativeSize.h > 0) {
-                var w = wrap.clientWidth - 10;
-                var h = wrap.clientHeight - 10;
+                var w = wrap.clientWidth - 12;
+                var h = wrap.clientHeight - 12;
+
                 if (w > 0 && h > 0) k = Math.min(w / nativeSize.w, h / nativeSize.h);
             }
         } else {
@@ -74,10 +78,27 @@
 
         k = Math.max(0.25, Math.min(6, k));
 
-        try { emu.screen_set_scale(k, k); } catch (e) { return; }
+        cont.style.zoom = k;
 
         appliedScale = k;
         markScale();
+    }
+
+    // Снимаем собственный масштаб v86: он то ставит canvas'у удвоенный CSS-размер
+    // (для мелких экранов), то transform текстовому слою. Нам нужен родной
+    // размер, дальше масштабируем сами.
+    function normalizeScreen() {
+        try { if (emu) emu.screen_set_scale(1, 1); } catch (e) { }
+
+        var canvas = document.querySelector("#screen_container canvas");
+
+        if (canvas && canvas.width && canvas.height) {
+            canvas.style.width = canvas.width + "px";
+            canvas.style.height = canvas.height + "px";
+        }
+
+        var text = document.querySelector("#screen_container > div");
+        if (text) text.style.transform = "";
     }
 
     function markScale() {
@@ -91,10 +112,10 @@
 
     function measureNative() {
         var cont = byId("screen_container");
-        if (!cont || !appliedScale) return;
+        if (!cont) return;
 
-        var w = cont.scrollWidth / appliedScale;
-        var h = cont.scrollHeight / appliedScale;
+        var w = cont.scrollWidth;
+        var h = cont.scrollHeight;
 
         if (w > 0 && h > 0) nativeSize = { w: w, h: h };
     }
@@ -311,12 +332,13 @@
         emu.add_listener("screen-set-size", function (size) {
             post({ action: "log", text: "screen " + size[0] + "x" + size[1] + "x" + size[2] });
 
-            // v86 сам ставит 2x для мелких экранов, а нам нужен свой масштаб:
-            // возвращаем 1:1, запоминаем родной размер и применяем выбранный
-            try { emu.screen_set_scale(1, 1); } catch (e) { }
-            appliedScale = 1;
-
+            // v86 сам ставит 2x для мелких экранов и transform для текстового
+            // режима: снимаем, меряем родной размер, применяем свой масштаб
             requestAnimationFrame(function () {
+                var cont = byId("screen_container");
+                if (cont) cont.style.zoom = 1;
+
+                normalizeScreen();
                 measureNative();
                 applyScale();
             });
