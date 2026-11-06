@@ -41,6 +41,29 @@ namespace Hv86.Core
             }
         }
 
+        /// <summary>
+        /// Каталог headless-движка (engine\vmhost.mjs). В отладочной раскладке
+        /// exe лежит в bin\, а engine - на уровень выше.
+        /// </summary>
+        public static string EngineDir
+        {
+            get
+            {
+                string local = Path.Combine(BaseDir, "engine");
+                if (File.Exists(Path.Combine(local, "vmhost.mjs"))) return local;
+
+                try
+                {
+                    string parent = Path.GetFullPath(Path.Combine(BaseDir, ".."));
+                    string up = Path.Combine(parent, "engine");
+                    if (File.Exists(Path.Combine(up, "vmhost.mjs"))) return up;
+                }
+                catch { }
+
+                return local;
+            }
+        }
+
         public static string ExePath
         {
             get { return Path.Combine(BaseDir, "hv86.exe"); }

@@ -216,6 +216,7 @@ namespace Hv86.Vm
             vm.MemoryMb = memoryMb;
             vm.VgaMemoryMb = vgaMb;
             vm.Autostart = Json.GetBool(parameters, "autostart", false);
+            vm.Engine = Json.GetString(parameters, "engine", "web") == "headless" ? "headless" : "web";
             vm.NetMode = Json.GetString(parameters, "net_mode", "nat") == "relay" ? "relay" : "nat";
             vm.BootOrder = preset == null ? "auto" : Json.GetString(preset, "boot", "auto");
             vm.HdaFile = null;
@@ -664,6 +665,11 @@ namespace Hv86.Vm
 
                 string netMode = Json.GetString(parameters, "net_mode", null);
                 if (netMode == "nat" || netMode == "relay") def.NetMode = netMode;
+
+                // движок выбирается при старте: меняем только у остановленной ВМ
+                string engine = Json.GetString(parameters, "engine", null);
+                if ((engine == "web" || engine == "headless") && !running && def.State == "stopped")
+                    def.Engine = engine;
 
                 string mode = Json.GetString(parameters, "ft_mode", def.FtMode);
                 if (mode == "off" || mode == "checkpoint" || mode == "replica") def.FtMode = mode;

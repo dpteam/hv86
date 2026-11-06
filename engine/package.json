@@ -1,0 +1,10 @@
+﻿{
+  "name": "hv86-engine",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "hv86 headless VM host (v86 in Node)",
+  "dependencies": {
+    "v86": "0.5.473"
+  }
+}

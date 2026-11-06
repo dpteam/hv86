@@ -35,7 +35,8 @@ namespace Hv86
             bool isUi = !hasFlag && !isVmHost && !HasFlag(args, "--smoke") &&
                         !HasFlag(args, "--selftest") && !HasFlag(args, "--version") &&
                         !HasFlag(args, "--itest") && !HasFlag(args, "--engine") &&
-                        !HasFlag(args, "--unit") && !HasFlag(args, "--cli") && !HasFlag(args, "--ctl");
+                        !HasFlag(args, "--unit") && !HasFlag(args, "--cli") && !HasFlag(args, "--ctl") &&
+                        !HasFlag(args, "--htest");
 
             if (!isUi) ConsoleHelper.Attach();
 
@@ -122,6 +123,14 @@ namespace Hv86
                 Log.Role = "itest";
                 Log.MinLevel = LogLevel.Debug;
                 return IntegrationTest.Run(NextTo(args, "--itest", ""));
+            }
+
+            // ------------------------------------------- headless integration test
+            if (HasFlag(args, "--htest"))
+            {
+                Log.Role = "htest";
+                Log.MinLevel = LogLevel.Info;
+                return HeadlessTest.Run();
             }
 
             // ----------------------------------------------- движок без службы

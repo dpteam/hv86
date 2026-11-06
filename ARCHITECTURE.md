@@ -114,6 +114,27 @@ WebSocket на 127.0.0.1 со случайным портом, пакеты `CON
 - Ограничения релея: 128 потоков на соединение, буфер 4 МБ на поток,
   таймаут установки 12 с, ответы об ошибках по кодам протокола (0x41–0x49).
 
+## 2a. Движки: web и headless
+
+Одна и та же ВМ может исполняться двумя разными процессами, и для службы
+разницы нет — протокол канала один (`vm.status/start/stop/saveState/...`).
+
+| | `engine=web` | `engine=headless` |
+|---|---|---|
+| процесс | `hv86.exe --vmhost` | `node engine\vmhost.mjs --config …` |
+| сессия | пользовательская | **службы (0)** |
+| экран | canvas v86 целиком | VGA-текст 80×25 с ANSI-цветами |
+| мышь/звук | да | нет |
+| окно | своё окно v86 | окно интерфейса рисует текст |
+
+- Headless не умеет пиксели в принципе: в Node нет DOM/canvas, а шим браузера
+  внутри эмулятора — хрупкий костыль (разбор в `docs/research/headless.md`).
+- `NodeRuntime` ищет Node 20+ (`HV86_NODE` → PATH → Program Files → `engine\node`),
+  `Vm/V86Assets` выкладывает вшитые BIOS/wasm в кэш, пакет `v86` пиннится
+  в `engine\package.json` (`tools\fetch-engine.ps1`).
+- Сохранение диска в headless делает сам Node: state и так у него в руках,
+  повторяем тот же разбор блоков, что и `Vm/V86State.cs`.
+
 ## 3. Снапшоты (checkpoint-дерево)
 
 ```
@@ -197,17 +218,20 @@ hv86.csproj          net9.0-windows, WinForms-шелл + WebView2, single-file p
 app.manifest         requireAdministrator
 AGENTS.md ROADMAP.md ARCHITECTURE.md README.md PROMPT.md
 src/App/             Program, ServiceHost, ServiceManager, ServiceRunner, MainForm,
-                     WebBridge, Cli, SelfTest, UnitTest, SmokeTest, IntegrationTest, Diagnostics
+                     WebBridge, Cli, SelfTest, UnitTest, SmokeTest, IntegrationTest,
+                     HeadlessTest, Diagnostics, HeadlessConsoleWindow
 src/Core/            Paths, Json, AtomicFile, Log, Settings, SingleInstance, PipeServer,
-                     PipeClient, ProcessJob, SessionLauncher, SelfHost, Brand, Resources
+                     PipeClient, ProcessJob, SessionLauncher, SelfHost, NodeRuntime,
+                     Brand, Resources
 src/Vm/              VmDefinition, VmStore, VmManager, VmProcess, CheckpointStore,
-                     PresetCatalog, V86State, VmArchive, ForwardRule
+                     PresetCatalog, V86State, V86Assets, VmArchive, ForwardRule
 src/VmHost/          VmHostForm, VmHostRunner, VmResourceServer, PortForwarder, WispRelay
 web/                 manager.html, manager.js, console.html, console.js, theme.css, i18n/
+engine/              vmhost.mjs (Node), package.json (v86 pinned), node_modules (npm install)
 assets/              hv86.ico, presets.json, v86/<version>/{libv86.js,v86.wasm,seabios.bin,vgabios.bin}
-docs/research/       v86-api.md, webview2-service.md, ft-design.md
-tools/               fetch-webview2.ps1, fetch-v86.ps1, make-icon.ps1, build.cmd,
-                     publish.cmd, selftest.ps1, preview-manager.ps1
+docs/research/       v86-api.md, webview2-service.md, ft-design.md, wisp.md, headless.md
+tools/               fetch-webview2.ps1, fetch-v86.ps1, fetch-engine.ps1, make-icon.ps1,
+                     build.cmd, publish.cmd, selftest.ps1, preview-manager.ps1
 ```
 
 ## 10. Что считается «готово» для v1
@@ -226,6 +250,7 @@ tools/               fetch-webview2.ps1, fetch-v86.ps1, make-icon.ps1, build.cmd
 | `--selftest` | вшитые ресурсы и их размеры, WebView2 Runtime, каталог данных, пресеты, служба |
 | `--smoke <образ>` | настоящая загрузка гостя → save_state → перезапуск из state → рост счётчика инструкций |
 | `--itest` | движок + vmhost: create → boot → snapshot → kill vmhost → автоподъём → revert → delete |
+| `--htest` | headless: ВМ в Node, текст FreeDOS на экране, снапшот, остановка (нужен Node 20+) |
 
 Дополнительно `tools\preview-manager.ps1` собирает страницу менеджера в обычный HTML
 с демо-данными: вёрстку можно проверять в браузере, не собирая exe и не поднимая службу.

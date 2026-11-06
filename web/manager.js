@@ -365,6 +365,7 @@
         byId("setName").value = vm.name || "";
         byId("setMemory").value = String(vm.memory_mb || 128);
         byId("setAutostart").checked = !!vm.autostart;
+        byId("setEngine").value = vm.engine === "headless" ? "headless" : "web";
         byId("setNetMode").value = vm.net_mode === "relay" ? "relay" : "nat";
 
         byId("setFtMode").value = vm.ft_mode === "checkpoint" ? "checkpoint" : "off";
@@ -466,6 +467,7 @@
             max_attempts: Math.max(0, Number(byId("setAttempts").value) || 0),
             restore_on_crash: byId("setRestore").checked,
             net_mode: byId("setNetMode").value,
+            engine: byId("setEngine").value,
             forwards: state.fwdDraft
         });
 

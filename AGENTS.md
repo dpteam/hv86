@@ -50,6 +50,8 @@ WebView2 UI + служба. Дизайн — [`ARCHITECTURE.md`](ARCHITECTURE.md
 - `--unit`: формат state-файла v86, применение блоков диска, JSON, пути. WebView2 не нужен.
 - `--smoke <образ>`: реальная загрузка гостя, `save_state`, перезапуск из state.
 - `--itest`: движок + vmhost: создать → загрузить → снапшот → убить vmhost → автоподъём → откат.
+- `--htest`: headless-движок (Node): текст FreeDOS на экране, снапшот, остановка.
+  Без Node 20+ и `engine\node_modules` выходит с кодом 3 (пропуск, а не «зелёно»).
 - UI без сборки: `tools\preview-manager.ps1`; страница сама включает демо-данные, когда
   `chrome.webview` отсутствует (см. `preview()` в `web/manager.js`).
 

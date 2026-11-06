@@ -64,6 +64,22 @@ namespace Hv86.Vm
         public string CdromPath { get { return Paths.Absolute(Id, CdromFile); } }
         public string FdaPath { get { return Paths.Absolute(Id, FdaFile); } }
 
+        /// <summary>Имя boot_order в число, которое понимает v86.</summary>
+        public static int BootOrderValue(string name)
+        {
+            switch ((name ?? "").Trim().ToUpperInvariant())
+            {
+                case "CD_FLOPPY_HARDDISK": return 0x213;
+                case "CD_HARDDISK_FLOPPY": return 0x123;
+                case "FLOPPY_CD_HARDDISK": return 0x231;
+                case "FLOPPY_HARDDISK_CD": return 0x321;
+                case "HARDDISK_CD_FLOPPY": return 0x132;
+                default: return 0;
+            }
+        }
+
+        public bool IsHeadless { get { return Engine == "headless"; } }
+
         public bool HasHda { get { return !string.IsNullOrEmpty(HdaFile); } }
         public bool HasCdrom { get { return !string.IsNullOrEmpty(CdromFile); } }
         public bool HasFda { get { return !string.IsNullOrEmpty(FdaFile); } }
@@ -128,6 +144,7 @@ namespace Hv86.Vm
             vm.MemoryMb = Json.GetInt(map, "memory_mb", 128);
             vm.VgaMemoryMb = Json.GetInt(map, "vga_memory_mb", 8);
             vm.Engine = Json.GetString(map, "engine", "web");
+            if (vm.Engine != "web" && vm.Engine != "headless") vm.Engine = "web";
 
             Dictionary<string, object> media = Json.GetObject(map, "media");
             if (media != null)

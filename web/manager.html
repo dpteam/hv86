@@ -290,6 +290,15 @@
       </div>
 
       <div class="field">
+        <label data-i18n="set.engine">Engine</label>
+        <select id="setEngine">
+          <option value="web" data-i18n="set.engineWeb">Web — graphics and mouse (WebView2)</option>
+          <option value="headless" data-i18n="set.engineHeadless">Headless — text console, runs without a logged-in user</option>
+        </select>
+        <div class="hint" data-i18n="set.engineHint">Applies after restart. Headless runs in the service session and shows VGA text only; GUI guests need the web engine.</div>
+      </div>
+
+      <div class="field">
         <label data-i18n="set.net">Network</label>
         <select id="setNetMode">
           <option value="nat" data-i18n="set.netNat">NAT — HTTP out + port forwarding</option>

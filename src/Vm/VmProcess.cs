@@ -1,16 +1,23 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Text;
 using System.Threading.Tasks;
 using Hv86.Core;
 
 namespace Hv86.Vm
 {
     /// <summary>
-    /// Один процесс vmhost: запуск, подключение к его каналу, остановка.
+    /// Один процесс ВМ: запуск, подключение к его каналу, остановка.
+    ///
+    /// Два движка с одним протоколом:
+    ///   web      - `hv86.exe --vmhost` (WebView2 + v86, картинка и мышь);
+    ///   headless - `node engine/vmhost.mjs` (v86 в Node, только VGA-текст,
+    ///              зато работает в сессии 0 - без входа пользователя).
     ///
     /// Процесс отдельный, а не поток службы, ровно из-за отказоустойчивости:
-    /// упавший/зависший vmhost можно убить и поднять заново, не трогая
+    /// упавший/зависший хост можно убить и поднять заново, не трогая
     /// остальные ВМ и саму службу.
     /// </summary>
     public sealed class VmProcess : IDisposable
@@ -39,27 +46,42 @@ namespace Hv86.Vm
             }
         }
 
-        /// <summary>
-        /// Поднимает vmhost и ждёт, пока он откроет свой канал.
-        /// Бросает Hv86Exception с человеческим текстом, если не вышло.
-        /// </summary>
+        // --------------------------------------------------------------- запуск
+
         public static async Task<VmProcess> LaunchAsync(VmDefinition vm, bool showConsole, string restorePath,
             Action<string, Dictionary<string, object>> onEvent)
         {
             if (vm == null) throw new Hv86Exception("ВМ не найдена");
 
-            string arguments = SelfHost.Arguments("--vmhost " + vm.Id + (showConsole ? " --console" : " --hidden"));
+            Process process;
+            string arguments;
+            string workingDir;
 
-            if (!string.IsNullOrEmpty(restorePath))
-                arguments += " --restore \"" + restorePath + "\"";
+            if (vm.IsHeadless)
+            {
+                if (showConsole)
+                    Log.Info("VMHOST", "headless-движок: окно консоли создаёт интерфейс, не процесс ВМ");
 
-            Log.Info("VMHOST", "запуск: " + SelfHost.FileName + " " + arguments + " (" + SessionLauncher.Describe() + ")");
+                process = StartHeadless(vm, restorePath, out arguments);
+                workingDir = Paths.EngineDir;
+            }
+            else
+            {
+                arguments = SelfHost.Arguments("--vmhost " + vm.Id + (showConsole ? " --console" : " --hidden"));
 
-            string error;
-            Process process = SessionLauncher.Start(SelfHost.FileName, arguments, out error);
+                if (!string.IsNullOrEmpty(restorePath))
+                    arguments += " --restore \"" + restorePath + "\"";
 
-            if (process == null)
-                throw new Hv86Exception("не удалось запустить процесс ВМ: " + error);
+                string error;
+                process = SessionLauncher.Start(SelfHost.FileName, arguments, out error);
+
+                if (process == null)
+                    throw new Hv86Exception("не удалось запустить процесс ВМ: " + error);
+
+                workingDir = "";
+            }
+
+            Log.Info("VMHOST", "запуск (" + vm.Engine + "): " + arguments + " (" + SessionLauncher.Describe() + ")");
 
             VmProcess host = new VmProcess();
             host.VmId = vm.Id;
@@ -67,38 +89,127 @@ namespace Hv86.Vm
 
             SharedJob.Assign(process);
 
-            PipeClient client = new PipeClient(PipeNames.VmHost(vm.Id));
-            host.Client = client;
+            await host.ConnectAsync(onEvent).ConfigureAwait(false);
+            return host;
+        }
+
+        /// <summary>Собирает конфиг для Node-движка и стартует его.</summary>
+        private static Process StartHeadless(VmDefinition vm, string restorePath, out string arguments)
+        {
+            string node = NodeRuntime.Executable;
+            if (string.IsNullOrEmpty(node))
+                throw new Hv86Exception("headless-движок недоступен: " + NodeRuntime.Error);
+
+            string engineDir = Paths.EngineDir;
+
+            if (!File.Exists(Path.Combine(engineDir, "vmhost.mjs")))
+                throw new Hv86Exception("не найден engine\\vmhost.mjs рядом с hv86");
+
+            if (!Directory.Exists(Path.Combine(engineDir, "node_modules", "v86")))
+                throw new Hv86Exception("в engine\\ нет пакета v86: выполните tools\\fetch-engine.ps1");
+
+            string assetsError;
+            string assets = V86Assets.Ensure(out assetsError);
+            if (assets == null)
+                throw new Hv86Exception("не удалось подготовить ассеты v86: " + assetsError);
+
+            string tempDir = Path.Combine(Paths.VmDir(vm.Id), "temp");
+            Directory.CreateDirectory(tempDir);
+
+            string configPath = Path.Combine(tempDir, "boot-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".json");
+
+            Dictionary<string, object> config = Json.Obj(
+                "id", vm.Id,
+                "name", vm.Name,
+                "memory", (long)vm.MemoryMb * 1024 * 1024,
+                "vgaMemory", (long)vm.VgaMemoryMb * 1024 * 1024,
+                "bios", Path.Combine(assets, "seabios.bin"),
+                "vgaBios", Path.Combine(assets, "vgabios.bin"),
+                "wasm", Path.Combine(engineDir, "node_modules", "v86", "build", "v86.wasm"),
+                "bootOrder", VmDefinition.BootOrderValue(vm.BootOrder),
+                "netType", string.IsNullOrEmpty(vm.NetType) ? "virtio" : vm.NetType,
+                "tempDir", tempDir);
+
+            if (vm.HasHda) config["hda"] = vm.HdaPath;
+            if (vm.HasCdrom) config["cdrom"] = vm.CdromPath;
+            if (vm.HasFda) config["fda"] = vm.FdaPath;
+
+            if (!string.IsNullOrEmpty(restorePath) && File.Exists(restorePath))
+                config["initialState"] = restorePath;
+
+            Json.WriteFile(configPath, config);
+
+            arguments = "\"" + Path.Combine(engineDir, "vmhost.mjs") + "\" --config \"" + configPath + "\"";
+
+            ProcessStartInfo psi = new ProcessStartInfo
+            {
+                FileName = node,
+                Arguments = arguments,
+                WorkingDirectory = engineDir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+
+            Process process = Process.Start(psi);
+            if (process == null) throw new Hv86Exception("node не запустился");
+
+            string prefix = "node/" + vm.Id;
+
+            process.OutputDataReceived += delegate (object s, DataReceivedEventArgs e)
+            {
+                if (!string.IsNullOrEmpty(e.Data)) Log.Info(prefix, e.Data);
+            };
+
+            process.ErrorDataReceived += delegate (object s, DataReceivedEventArgs e)
+            {
+                if (!string.IsNullOrEmpty(e.Data)) Log.Error(prefix, e.Data);
+            };
+
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            return process;
+        }
+
+        // ------------------------------------------------------------ канал
+
+        private async Task ConnectAsync(Action<string, Dictionary<string, object>> onEvent)
+        {
+            PipeClient client = new PipeClient(PipeNames.VmHost(VmId));
+            Client = client;
 
             client.EventReceived += delegate (string name, Dictionary<string, object> data)
             {
-                host.LastBeatUtc = DateTime.UtcNow;
+                LastBeatUtc = DateTime.UtcNow;
 
                 if (name == "vm.metrics")
                 {
-                    host.Instructions = Json.GetLong(data, "instructions", host.Instructions);
-                    host.Mips = Json.GetInt(data, "mips", host.Mips);
+                    Instructions = Json.GetLong(data, "instructions", Instructions);
+                    Mips = Json.GetInt(data, "mips", Mips);
                 }
 
                 try { onEvent?.Invoke(name, data); }
                 catch (Exception ex) { Log.Warn("VMHOST", "обработчик события: " + ex.Message); }
             };
 
-            if (!await client.EnsureConnectedAsync(20000).ConfigureAwait(false))
+            if (!await client.EnsureConnectedAsync(30000).ConfigureAwait(false))
             {
-                try { if (!process.HasExited) process.Kill(true); } catch { }
+                try { if (!Process.HasExited) Process.Kill(true); } catch { }
                 client.Dispose();
 
-                throw new Hv86Exception("процесс ВМ не открыл канал управления (см. лог vm)");
+                throw new Hv86Exception("процесс ВМ не открыл канал управления (см. лог " + VmId + ")");
             }
 
-            // ждём, пока эмулятор действительно начнёт работать
             DateTime deadline = DateTime.UtcNow.AddSeconds(30);
 
             while (DateTime.UtcNow < deadline)
             {
-                if (process.HasExited)
-                    throw new Hv86Exception("процесс ВМ завершился при старте (код " + process.ExitCode + ")");
+                if (Process.HasExited)
+                    throw new Hv86Exception("процесс ВМ завершился при старте (код " + Process.ExitCode + ")");
 
                 try
                 {
@@ -106,7 +217,7 @@ namespace Hv86.Vm
                     Dictionary<string, object> status = result as Dictionary<string, object>;
                     string state = Json.GetString(status, "state", "");
 
-                    if (state == "running" || state == "paused") return host;
+                    if (state == "running" || state == "paused") return;
                     if (state == "failed")
                         throw new Hv86Exception(Json.GetString(status, "error", "эмулятор не запустился"));
                 }
@@ -116,11 +227,13 @@ namespace Hv86.Vm
                 await Task.Delay(300).ConfigureAwait(false);
             }
 
-            try { process.Kill(true); } catch { }
+            try { Process.Kill(true); } catch { }
             throw new Hv86Exception("ВМ не вышла в состояние running за 30 секунд");
         }
 
-        /// <summary>Мягкое завершение: vmhost сохраняет диск и выходит.</summary>
+        // ------------------------------------------------------------ остановка
+
+        /// <summary>Мягкое завершение: хост сохраняет диск и выходит.</summary>
         public async Task<bool> ShutdownAsync(int timeoutMs)
         {
             if (Process == null) return true;

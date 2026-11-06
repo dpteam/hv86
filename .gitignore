@@ -6,6 +6,7 @@ publish/
 # generated / downloaded (see tools/fetch-*.ps1)
 lib/webview2/
 assets/v86/
+engine/node_modules/
 .preview/
 data/
 

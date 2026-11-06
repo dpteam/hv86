@@ -29,6 +29,8 @@ namespace Hv86.App
         private readonly System.Windows.Forms.Timer _timer;
         private readonly NotifyIcon _tray;
         private readonly SemaphoreSlim _clientGate = new SemaphoreSlim(1, 1);
+        private readonly Dictionary<string, HeadlessConsoleWindow> _headlessWindows =
+            new Dictionary<string, HeadlessConsoleWindow>(StringComparer.Ordinal);
 
         private PipeClient _client;
         private bool _webReady;
@@ -212,7 +214,7 @@ namespace Hv86.App
                 if (!string.IsNullOrEmpty(path)) _bridge.Send(WebBridge.Msg("picked", "path", path));
             });
 
-            foreach (string command in new[] { "start", "stop", "pause", "resume", "reset", "console", "hide", "delete" })
+            foreach (string command in new[] { "start", "stop", "pause", "resume", "reset", "hide", "delete" })
             {
                 string local = command;
                 _bridge.Register("vm." + local, async message =>
@@ -280,6 +282,34 @@ namespace Hv86.App
                 await CallService("vm.eject", Json.Obj(
                     "id", Json.GetString(message, "id", ""),
                     "kind", Json.GetString(message, "kind", "cdrom")), 120000);
+
+                await PushStateAsync();
+            });
+
+            // Консоль: у web-ВМ это окно vmhost, у headless - своё окно
+            // интерфейса, которое цепляется к каналу движка напрямую.
+            _bridge.Register("vm.console", async message =>
+            {
+                string id = Json.GetString(message, "id", "");
+
+                Dictionary<string, object> view = await CallService("vm.get", Json.Obj("id", id), 15000)
+                    as Dictionary<string, object>;
+
+                string engine = Json.GetString(view, "engine", "web");
+                string name = Json.GetString(view, "name", id);
+                string state = Json.GetString(view, "state", "");
+
+                if (engine == "headless")
+                {
+                    OpenHeadlessConsole(id, name);
+
+                    if (state == "stopped" || state == "failed")
+                        await CallService("vm.start", Json.Obj("id", id), 180000);
+                }
+                else
+                {
+                    await CallService("vm.console", Json.Obj("id", id), 180000);
+                }
 
                 await PushStateAsync();
             });
@@ -538,6 +568,31 @@ namespace Hv86.App
         }
 
         // ------------------------------------------------------------- helpers
+
+        private void OpenHeadlessConsole(string id, string name)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action<string, string>(OpenHeadlessConsole), id, name);
+                return;
+            }
+
+            HeadlessConsoleWindow window;
+
+            if (_headlessWindows.TryGetValue(id, out window) && window != null && !window.IsDisposed)
+            {
+                window.Activate();
+                window.BringToFront();
+                return;
+            }
+
+            window = new HeadlessConsoleWindow(id, name);
+            window.FormClosed += delegate { _headlessWindows.Remove(id); };
+
+            _headlessWindows[id] = window;
+            window.Show();
+            window.Activate();
+        }
 
         private static Dictionary<string, object> Clone(Dictionary<string, object> source)
         {

@@ -21,5 +21,17 @@ dotnet publish hv86.csproj -c Release -r win-x64 --self-contained true ^
   -o publish
 
 set "CODE=%ERRORLEVEL%"
+
+if "%CODE%"=="0" (
+  rem headless-движок лежит рядом с exe (без него работает только web-движок)
+  if exist "engine\vmhost.mjs" (
+    robocopy "engine" "publish\engine" /E /XD node_modules /NFL /NDL /NJH /NJS /NP >nul
+    if exist "engine\node_modules" (
+      robocopy "engine\node_modules" "publish\engine\node_modules" /E /NFL /NDL /NJH /NJS /NP >nul
+    )
+    echo engine: publish\engine
+  )
+)
+
 popd
 exit /b %CODE%

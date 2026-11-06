@@ -43,6 +43,14 @@ $dll = Join-Path $root 'bin\hv86.dll'
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'hv86-selftest'
 $env:HV86_ROOT = $tempRoot
 
+if (Get-Command node -ErrorAction SilentlyContinue) {
+    $engineDeps = Join-Path $root 'engine\node_modules\v86'
+    if (-not (Test-Path $engineDeps)) {
+        Write-Host "installing headless engine dependencies (npm install) ..."
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\fetch-engine.ps1')
+    }
+}
+
 $script:failed = 0
 
 function Step([string]$name) {
@@ -121,6 +129,27 @@ if (-not $SkipItest) {
     Step 'itest'
     & dotnet $dll --itest
     Record 'itest' $LASTEXITCODE
+}
+
+# ---------------------------------------------------------------- 6. headless
+
+if (-not $SkipItest) {
+    Step 'headless'
+
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        & dotnet $dll --htest
+        $code = $LASTEXITCODE
+
+        if ($code -eq 3) {
+            Write-Host '[skip] headless engine is not installed (tools\fetch-engine.ps1)' -ForegroundColor Yellow
+        }
+        else {
+            Record 'headless' $code
+        }
+    }
+    else {
+        Write-Host '[skip] Node.js not found - headless engine unavailable' -ForegroundColor Yellow
+    }
 }
 
 # ---------------------------------------------------------------- summary
