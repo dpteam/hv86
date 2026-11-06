@@ -103,6 +103,10 @@
   "set.fwdBad": "Valid ports are required (1-65535)",
   "set.fwdDup": "This host port is already used by another rule",
 
+  "set.share": "Shared folder",
+  "set.shareRo": "Read-only",
+  "set.shareHint": "Headless engine only. In the guest: mount -t 9p -o trans=virtio,version=9p2000.L host9p /mnt/share",
+
   "clone.title": "Clone virtual machine",
   "clone.label": "Name for the new virtual machine",
   "clone.doing": "Cloning…",

@@ -103,6 +103,10 @@
   "set.fwdBad": "Нужны корректные порты (1–65535)",
   "set.fwdDup": "Этот порт хоста уже занят правилом",
 
+  "set.share": "Общая папка",
+  "set.shareRo": "Только чтение",
+  "set.shareHint": "Только headless-движок. В госте: mount -t 9p -o trans=virtio,version=9p2000.L host9p /mnt/share",
+
   "clone.title": "Клонирование ВМ",
   "clone.label": "Имя новой виртуальной машины",
   "clone.doing": "Клонирую…",

@@ -214,6 +214,13 @@ namespace Hv86.App
                 if (!string.IsNullOrEmpty(path)) _bridge.Send(WebBridge.Msg("picked", "path", path));
             });
 
+            _bridge.Register("pick.folder", delegate
+            {
+                string path = AskFolder("Select a folder to share with the VM");
+
+                if (!string.IsNullOrEmpty(path)) _bridge.Send(WebBridge.Msg("picked", "path", path));
+            });
+
             foreach (string command in new[] { "start", "stop", "pause", "resume", "reset", "hide", "delete" })
             {
                 string local = command;
@@ -651,6 +658,21 @@ namespace Hv86.App
             })
             {
                 return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
+            }
+        }
+
+        private string AskFolder(string title)
+        {
+            if (InvokeRequired)
+                return (string)Invoke(new Func<string, string>(AskFolder), title);
+
+            using (FolderBrowserDialog dialog = new FolderBrowserDialog
+            {
+                Description = title,
+                ShowNewFolderButton = true
+            })
+            {
+                return dialog.ShowDialog(this) == DialogResult.OK ? dialog.SelectedPath : null;
             }
         }
 

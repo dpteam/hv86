@@ -369,6 +369,21 @@
         </div>
         <div class="hint" data-i18n="set.fwdHint">Listens on 127.0.0.1. The guest needs its network up (DHCP) before ports answer.</div>
       </div>
+
+      <div class="group-title" data-i18n="set.share">Shared folder</div>
+
+      <div class="field">
+        <div class="row">
+          <input type="text" id="setSharePath" readonly placeholder="—">
+          <button class="btn" data-act="pick.folder" data-target="setSharePath" data-i18n="new.browse">Browse…</button>
+          <button class="btn" data-act="share.clear" data-i18n="btn.close">✕</button>
+        </div>
+        <label class="check" style="margin-top:8px">
+          <input type="checkbox" id="setShareReadOnly">
+          <span data-i18n="set.shareRo">Read-only</span>
+        </label>
+        <div class="hint" data-i18n="set.shareHint">Headless engine only. In the guest: mount -t 9p -o trans=virtio,version=9p2000.L host9p /mnt/share</div>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="btn" data-close="settingsModal" data-i18n="btn.cancel">Cancel</button>

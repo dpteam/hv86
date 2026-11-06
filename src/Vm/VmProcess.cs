@@ -134,6 +134,15 @@ namespace Hv86.Vm
             if (vm.HasCdrom) config["cdrom"] = vm.CdromPath;
             if (vm.HasFda) config["fda"] = vm.FdaPath;
 
+            // 9p-шара: путь к настоящей папке хоста + режим
+            if (!string.IsNullOrEmpty(vm.SharePath) && Directory.Exists(vm.SharePath))
+            {
+                config["share"] = Json.Obj(
+                    "path", vm.SharePath,
+                    "tag", string.IsNullOrEmpty(vm.ShareTag) ? "host9p" : vm.ShareTag,
+                    "readonly", vm.ShareReadOnly);
+            }
+
             if (!string.IsNullOrEmpty(restorePath) && File.Exists(restorePath))
                 config["initialState"] = restorePath;
 

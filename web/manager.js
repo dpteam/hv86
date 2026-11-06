@@ -367,6 +367,8 @@
         byId("setAutostart").checked = !!vm.autostart;
         byId("setEngine").value = vm.engine === "headless" ? "headless" : "web";
         byId("setNetMode").value = vm.net_mode === "relay" ? "relay" : "nat";
+        byId("setSharePath").value = vm.share_path || "";
+        byId("setShareReadOnly").checked = vm.share_readonly !== false;
 
         byId("setFtMode").value = vm.ft_mode === "checkpoint" ? "checkpoint" : "off";
         byId("setInterval").value = Math.max(2, Math.round((vm.interval_ms || 15000) / 1000));
@@ -468,6 +470,8 @@
             restore_on_crash: byId("setRestore").checked,
             net_mode: byId("setNetMode").value,
             engine: byId("setEngine").value,
+            share_path: byId("setSharePath").value,
+            share_readonly: byId("setShareReadOnly").checked,
             forwards: state.fwdDraft
         });
 
@@ -534,6 +538,15 @@
             case "pick.file":
                 state.pendingPickTarget = element.getAttribute("data-target") || "newIso";
                 post({ action: "pick.file", kind: "image" });
+                return;
+
+            case "pick.folder":
+                state.pendingPickTarget = element.getAttribute("data-target") || "setSharePath";
+                post({ action: "pick.folder" });
+                return;
+
+            case "share.clear":
+                byId("setSharePath").value = "";
                 return;
 
             case "vm.create": createVm(); return;

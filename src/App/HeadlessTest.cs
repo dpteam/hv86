@@ -59,6 +59,47 @@ namespace Hv86.App
             Console.WriteLine("  engine: " + engineDir);
             Console.WriteLine("  root:   " + root);
 
+            // ---- 9p-сервер: собственный протокольный тест (без гостя)
+            string ninePTest = Path.Combine(engineDir, "test-9p.mjs");
+
+            if (File.Exists(ninePTest))
+            {
+                try
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo
+                    {
+                        FileName = node,
+                        Arguments = "\"" + ninePTest + "\"",
+                        WorkingDirectory = engineDir,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+
+                    using (Process process = Process.Start(psi))
+                    {
+                        string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+                        process.WaitForExit(120000);
+
+                        if (process.ExitCode == 0) Ok("9p protocol", "9P2000.L server passed its own test");
+                        else
+                        {
+                            Fail("9p protocol test failed");
+                            Console.WriteLine(output);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Fail("9p protocol test: " + ex.Message);
+                }
+            }
+
+            string shareDir = Path.Combine(root, "share");
+            Directory.CreateDirectory(shareDir);
+            File.WriteAllText(Path.Combine(shareDir, "hello.txt"), "hv86 9p");
+
             ServiceRunner runner = new ServiceRunner();
             PipeClient client = new PipeClient(PipeNames.Service);
 
@@ -76,10 +117,15 @@ namespace Hv86.App
                     "name", "htest-freedos",
                     "preset", "freedos",
                     "memory_mb", 32,
-                    "engine", "headless"));
+                    "engine", "headless",
+                    "share_path", shareDir,
+                    "share_readonly", true));
 
                 string id = Json.GetString(created, "id", "");
                 Ok("vm.create (headless)", id);
+
+                if (Json.GetString(created, "share_path", "") == shareDir) Ok("share", "9p folder attached");
+                else Fail("share path did not stick: " + Json.GetString(created, "share_path", ""));
 
                 Dictionary<string, object> view = Call(client, "vm.get", Json.Obj("id", id));
                 if (Json.GetString(view, "engine", "") == "headless") Ok("engine", "headless");

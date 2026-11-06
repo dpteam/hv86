@@ -42,6 +42,11 @@ namespace Hv86.Vm
         /// <summary>Проброс TCP: host-порт → порт в госте.</summary>
         public List<ForwardRule> Forwards = new List<ForwardRule>();
 
+        /// <summary>Общая папка для гостя (9p). Только headless-движок.</summary>
+        public string SharePath;
+        public string ShareTag = "host9p";
+        public bool ShareReadOnly = true;
+
         public bool Autostart;
 
         // Динамическая отказоустойчивость
@@ -112,6 +117,16 @@ namespace Hv86.Vm
                     netBlock["forwards"] = forwardList;
                 }
 
+                Dictionary<string, object> shareBlock = null;
+
+                if (!string.IsNullOrEmpty(SharePath))
+                {
+                    shareBlock = Json.Obj(
+                        "path", SharePath,
+                        "tag", string.IsNullOrEmpty(ShareTag) ? "host9p" : ShareTag,
+                        "readonly", ShareReadOnly);
+                }
+
                 return Json.Obj(
                     "id", Id,
                     "name", Name,
@@ -125,6 +140,7 @@ namespace Hv86.Vm
                     "net", netBlock,
                 "boot_order", BootOrder,
                 "autostart", Autostart,
+                "share", shareBlock,
                 "ft", ft,
                 "state", State,
                 "restarts", Restarts,
@@ -169,6 +185,14 @@ namespace Hv86.Vm
             vm.BootOrder = Json.GetString(map, "boot_order", "auto");
             vm.Autostart = Json.GetBool(map, "autostart", false);
 
+            Dictionary<string, object> share = Json.GetObject(map, "share");
+            if (share != null)
+            {
+                vm.SharePath = Json.GetString(share, "path", null);
+                vm.ShareTag = Json.GetString(share, "tag", "host9p");
+                vm.ShareReadOnly = Json.GetBool(share, "readonly", true);
+            }
+
             Dictionary<string, object> ft = Json.GetObject(map, "ft");
             if (ft != null)
             {
@@ -205,6 +229,8 @@ namespace Hv86.Vm
                 "floppy", DescribeMedia(FdaFile),
                 "autostart", Autostart,
                 "net_mode", NetMode,
+                "share_path", SharePath,
+                "share_readonly", ShareReadOnly,
                 "ft_mode", FtMode,
                 "restart", Restart,
                 "interval_ms", FtIntervalMs,

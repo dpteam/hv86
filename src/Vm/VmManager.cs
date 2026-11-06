@@ -218,6 +218,8 @@ namespace Hv86.Vm
             vm.Autostart = Json.GetBool(parameters, "autostart", false);
             vm.Engine = Json.GetString(parameters, "engine", "web") == "headless" ? "headless" : "web";
             vm.NetMode = Json.GetString(parameters, "net_mode", "nat") == "relay" ? "relay" : "nat";
+
+            ApplyShare(vm, parameters);
             vm.BootOrder = preset == null ? "auto" : Json.GetString(preset, "boot", "auto");
             vm.HdaFile = null;
             vm.CdromFile = null;
@@ -695,6 +697,8 @@ namespace Hv86.Vm
                     if (dropped > 0) Log.Warn("VM", "проброс: отброшено правил " + dropped);
                 }
 
+                ApplyShare(def, parameters);
+
                 runtime.NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, def.FtIntervalMs));
 
                 try { VmStore.Save(def); } catch (Exception ex) { Log.Warn("VM", "сохранение настроек: " + ex.Message); }
@@ -1097,6 +1101,32 @@ namespace Hv86.Vm
             string dir = Path.Combine(Paths.VmDir(id), "temp");
             Directory.CreateDirectory(dir);
             return Path.Combine(dir, "state-" + Guid.NewGuid().ToString("N").Substring(0, 10) + ".bin");
+        }
+
+        /// <summary>Общая папка: путь проверяем сразу, чтобы ошибка была в UI, а не при старте.</summary>
+        private static void ApplyShare(VmDefinition vm, Dictionary<string, object> parameters)
+        {
+            if (!parameters.ContainsKey("share_path")) return;
+
+            string path = (Json.GetString(parameters, "share_path", "") ?? "").Trim();
+
+            if (path.Length == 0)
+            {
+                vm.SharePath = null;
+                return;
+            }
+
+            string full;
+
+            try { full = Path.GetFullPath(path); }
+            catch (Exception ex) { throw new Hv86Exception("некорректный путь общей папки: " + ex.Message); }
+
+            if (!Directory.Exists(full))
+                throw new Hv86Exception("общая папка не найдена: " + full);
+
+            vm.SharePath = full;
+            vm.ShareTag = "host9p";
+            vm.ShareReadOnly = Json.GetBool(parameters, "share_readonly", vm.ShareReadOnly);
         }
 
         private static void TryDelete(string path)

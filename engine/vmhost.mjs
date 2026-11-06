@@ -17,6 +17,7 @@
 import fs from "node:fs";
 import net from "node:net";
 import { V86 } from "v86";
+import { createShareHandler } from "./fs9p.mjs";
 
 const STREAM_PREFIX = "\\\\.\\pipe\\hv86-vm-";
 const SCREEN_POLL_MS = 120;
@@ -100,6 +101,22 @@ function buildOptions(cfg) {
     if (cfg.hda) options.hda = { url: cfg.hda };
     if (cfg.cdrom) options.cdrom = { url: cfg.cdrom };
     if (cfg.fda) options.fda = { url: cfg.fda };
+
+    // общая папка: 9p-сервер поверх настоящего каталога хоста
+    if (cfg.share && cfg.share.path) {
+        if (!fs.existsSync(cfg.share.path)) {
+            log("share: каталог не найден, пропускаю: " + cfg.share.path);
+        } else {
+            options.filesystem = {
+                handle9p: createShareHandler(cfg.share.path, {
+                    readonly: !!cfg.share.readonly,
+                    log: (text) => log("9p: " + text)
+                })
+            };
+
+            log("share: " + cfg.share.path + (cfg.share.readonly ? " (ro)" : " (rw)"));
+        }
+    }
 
     if (cfg.initialState) options.initial_state = { url: cfg.initialState };
 

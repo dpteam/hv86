@@ -126,6 +126,7 @@ WebSocket на 127.0.0.1 со случайным портом, пакеты `CON
 | экран | canvas v86 целиком | VGA-текст 80×25 с ANSI-цветами |
 | мышь/звук | да | нет |
 | окно | своё окно v86 | окно интерфейса рисует текст |
+| общая папка (9p) | нет | **да** (`engine/fs9p.mjs`) |
 
 - Headless не умеет пиксели в принципе: в Node нет DOM/canvas, а шим браузера
   внутри эмулятора — хрупкий костыль (разбор в `docs/research/headless.md`).
@@ -134,6 +135,19 @@ WebSocket на 127.0.0.1 со случайным портом, пакеты `CON
   в `engine\package.json` (`tools\fetch-engine.ps1`).
 - Сохранение диска в headless делает сам Node: state и так у него в руках,
   повторяем тот же разбор блоков, что и `Vm/V86State.cs`.
+
+### Общая папка (9p)
+
+Гость видит выбранную папку хоста через virtio-9p: `engine/fs9p.mjs` —
+сервер **9P2000.L** поверх `handle9p`. Почему только headless: колбэк
+синхронный, а синхронного доступа к файлам в браузере нет; в Node есть `fs.*Sync`.
+
+- Путь хранится в `vm.json`: `share {path, tag: "host9p", readonly}`.
+- В госте: `mount -t 9p -o trans=virtio,version=9p2000.L host9p /mnt/share`.
+- Безопасность: пути только внутри папки, `..`/разделители отвергаются,
+  симлинки проверяются по `realpath` с настоящим корнем, read-only отдаёт `EROFS`.
+- Подробности и список неподдержанного (symlink/mknod/locks) —
+  `docs/research/9p.md`.
 
 ## 3. Снапшоты (checkpoint-дерево)
 
@@ -227,7 +241,8 @@ src/Vm/              VmDefinition, VmStore, VmManager, VmProcess, CheckpointStor
                      PresetCatalog, V86State, V86Assets, VmArchive, ForwardRule
 src/VmHost/          VmHostForm, VmHostRunner, VmResourceServer, PortForwarder, WispRelay
 web/                 manager.html, manager.js, console.html, console.js, theme.css, i18n/
-engine/              vmhost.mjs (Node), package.json (v86 pinned), node_modules (npm install)
+engine/              vmhost.mjs (Node), fs9p.mjs (9p-сервер), test-9p.mjs,
+                     package.json (v86 pinned), node_modules (npm install)
 assets/              hv86.ico, presets.json, v86/<version>/{libv86.js,v86.wasm,seabios.bin,vgabios.bin}
 docs/research/       v86-api.md, webview2-service.md, ft-design.md, wisp.md, headless.md
 tools/               fetch-webview2.ps1, fetch-v86.ps1, fetch-engine.ps1, make-icon.ps1,
@@ -250,7 +265,7 @@ tools/               fetch-webview2.ps1, fetch-v86.ps1, fetch-engine.ps1, make-i
 | `--selftest` | вшитые ресурсы и их размеры, WebView2 Runtime, каталог данных, пресеты, служба |
 | `--smoke <образ>` | настоящая загрузка гостя → save_state → перезапуск из state → рост счётчика инструкций |
 | `--itest` | движок + vmhost: create → boot → snapshot → kill vmhost → автоподъём → revert → delete |
-| `--htest` | headless: ВМ в Node, текст FreeDOS на экране, снапшот, остановка (нужен Node 20+) |
+| `--htest` | headless: ВМ в Node, текст FreeDOS на экране, 9p-протокол, снапшот (нужен Node 20+) |
 
 Дополнительно `tools\preview-manager.ps1` собирает страницу менеджера в обычный HTML
 с демо-данными: вёрстку можно проверять в браузере, не собирая exe и не поднимая службу.
