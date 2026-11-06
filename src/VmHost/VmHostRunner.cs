@@ -34,6 +34,7 @@ namespace Hv86.VmHost
         private readonly bool _smoke;
         private readonly bool _replica;
         private readonly int _replicaRelayPort;
+        private bool _idle;
 
         private VmDefinition _vm;
         private VmHostForm _form;
@@ -60,6 +61,7 @@ namespace Hv86.VmHost
         private TaskCompletionSource<bool> _restoreWait;
         private TaskCompletionSource<bool> _typeWait;
         private TaskCompletionSource<Dictionary<string, object>> _fetchProbe;
+        private TaskCompletionSource<Dictionary<string, object>> _scaleProbe;
         private bool _promoted;
 
         private sealed class PendingSave
@@ -74,7 +76,7 @@ namespace Hv86.VmHost
         }
 
         public VmHostRunner(string vmId, bool showConsole, string restorePath, bool smoke, bool replica = false,
-            int relayPort = 0)
+            int relayPort = 0, bool idle = false)
         {
             _vmId = vmId;
             _showConsole = showConsole;
@@ -82,6 +84,7 @@ namespace Hv86.VmHost
             _smoke = smoke;
             _replica = replica;
             _replicaRelayPort = relayPort;
+            _idle = idle;
         }
 
         // ------------------------------------------------------------------ run
@@ -187,7 +190,18 @@ namespace Hv86.VmHost
                     if (_vm.NetMode == "relay") StartRelay(0);
                 }
 
-                _bootConfig = BuildBootConfig();
+                // ВМ выключена, но окно открыто: гостя не создаём, пока служба не попросит
+                // (vm.boot). Так "Подключиться" не запускает ВМ сама.
+                if (_idle)
+                {
+                    _state = "idle";
+                    _form.Post(Json.Obj("action", "idle", "id", _vm.Id, "name", _vm.Name));
+                    Log.Info("VMHOST", "окно открыто без гостя (ВМ выключена)");
+                }
+                else
+                {
+                    _bootConfig = BuildBootConfig();
+                }
 
                 if (!_showConsole) _form.HideConsole();
 
@@ -212,6 +226,7 @@ namespace Hv86.VmHost
                 case "ready":
                     Log.Info("VMHOST", "страница консоли готова");
                     if (_bootConfig != null) SendBoot();
+                    else if (_idle) _form.Post(Json.Obj("action", "idle", "id", _vm.Id, "name", _vm.Name));
                     break;
 
                 case "log":
@@ -307,6 +322,10 @@ namespace Hv86.VmHost
                 case "fetchResult":
                     _fetchProbe?.TrySetResult(message);
                     break;
+
+                case "scaleResult":
+                    _scaleProbe?.TrySetResult(message);
+                    break;
             }
         }
 
@@ -326,6 +345,12 @@ namespace Hv86.VmHost
 
                 case "iso":
                     PickAndAttach(-1);
+                    break;
+
+                // кнопка Start на экране "выключена": запускать ВМ должен
+                // служба-владелец (состояние, диски, чекпоинты), а не окно
+                case "start":
+                    StartViaService();
                     break;
 
                 case "eject":
@@ -348,6 +373,37 @@ namespace Hv86.VmHost
                     });
                     break;
             }
+        }
+
+        /// <summary>
+        /// Просит службу запустить эту ВМ (кнопка Start на экране «выключена»).
+        /// Служба увидит, что окно уже открыто (`runtime.Idle`), и пришлёт сюда
+        /// `vm.boot` - новый процесс не поднимается, канал остаётся этот.
+        /// </summary>
+        private void StartViaService()
+        {
+            Task.Run(async delegate
+            {
+                try
+                {
+                    using (PipeClient client = new PipeClient(PipeNames.Service))
+                    {
+                        if (!await client.ConnectAsync(5000).ConfigureAwait(false))
+                        {
+                            Broadcast("vm.error", Json.Obj("id", _vmId, "message", "служба не отвечает"));
+                            return;
+                        }
+
+                        await client.CallForResultAsync("vm.start", Json.Obj("id", _vmId), 180000)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("VMHOST", "запуск через службу: " + ex.Message);
+                    Broadcast("vm.error", Json.Obj("id", _vmId, "message", ex.Message));
+                }
+            });
         }
 
         private void PickAndAttach(object _)
@@ -770,6 +826,8 @@ namespace Hv86.VmHost
                         "error", _error,
                         "instructions", _instructions,
                         "mips", _mips,
+                        "pid", System.Diagnostics.Process.GetCurrentProcess().Id,
+                        "idle", _idle,
                         "relay_port", _relay == null ? 0 : _relay.Port,
                         "relay_clients", _relay == null ? 0 : _relay.Handshakes);
 
@@ -787,6 +845,27 @@ namespace Hv86.VmHost
                     _form.Post(Json.Obj("action", "reset"));
                     _state = "running";
                     return Json.Obj("state", _state);
+
+                // окно было открыто без гостя (idle) - служба просит загрузить
+                case "vm.boot":
+                {
+                    if (!_idle) throw new Hv86Exception("ВМ уже загружена");
+
+                    // диск, медиа и сеть могли поменяться, пока окно стояло
+                    VmDefinition fresh = VmStore.Load(_vmId);
+                    if (fresh != null) _vm = fresh;
+
+                    _idle = false;
+                    _forwarder?.Apply(_vm.NetMode == "nat" ? _vm.Forwards : new List<ForwardRule>());
+
+                    _bootConfig = BuildBootConfig();
+                    SendBoot();
+
+                    _state = "starting";
+
+                    Log.Info("VMHOST", "загрузка в открытое окно (idle -> boot)");
+                    return Json.Obj("ok", true);
+                }
 
                 case "vm.show":
                     _form.BeginInvoke(new Action(_form.ShowConsole));
@@ -867,6 +946,26 @@ namespace Hv86.VmHost
                     _egress?.SetPolicy(policy);
 
                     return Json.Obj("mode", policy.Mode, "rules", policy.Allow.Count, "dropped", dropped);
+                }
+
+                // диагностика масштаба экрана: страница применяет режим и отдаёт размер
+                case "vm.debug.scale":
+                {
+                    string mode = Json.GetString(parameters, "mode", "1");
+
+                    TaskCompletionSource<Dictionary<string, object>> probe =
+                        new TaskCompletionSource<Dictionary<string, object>>(
+                            TaskCreationOptions.RunContinuationsAsynchronously);
+
+                    _scaleProbe = probe;
+                    _form.Post(Json.Obj("action", "scaleProbe", "mode", mode));
+
+                    Task finished = await Task.WhenAny(probe.Task, Task.Delay(15000)).ConfigureAwait(false);
+                    _scaleProbe = null;
+
+                    if (finished != probe.Task) throw new Hv86Exception("страница не ответила на пробу масштаба");
+
+                    return await probe.Task.ConfigureAwait(false);
                 }
 
                 case "vm.eject":

@@ -66,6 +66,7 @@ namespace Hv86
                 bool showConsole = HasFlag(args, "--console");
                 string restore = NextTo(args, "--restore", null);
                 bool replica = HasFlag(args, "--replica");
+                bool idle = HasFlag(args, "--idle");
 
                 // у реплики свой файл лога: два процесса не делят один
                 Log.Role = "vm-" + id + (replica ? "-replica" : "");
@@ -76,7 +77,7 @@ namespace Hv86
                 string relayText = NextTo(args, "--relay-port", null);
                 if (!string.IsNullOrEmpty(relayText)) int.TryParse(relayText, out relayPort);
 
-                return new VmHostRunner(id, showConsole, restore, false, replica, relayPort).Run();
+                return new VmHostRunner(id, showConsole, restore, false, replica, relayPort, idle).Run();
             }
 
             // ------------------------------------------------------------ smoke

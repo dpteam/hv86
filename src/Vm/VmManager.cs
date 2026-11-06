@@ -54,6 +54,10 @@ namespace Hv86.Vm
             public string ReplicaState = "";
             public DateTime ReplicaUtc = DateTime.UtcNow;
             public bool ReplicaStarting;
+
+            // окно, открытое для выключенной ВМ: гостя внутри нет, но к нему
+            // можно подключиться (как в Hyper-V) и запустить оттуда
+            public VmProcess Idle;
         }
 
         public VmManager()
@@ -151,6 +155,7 @@ namespace Hv86.Vm
                 view["relay_clients"] = runtime.RelayClients;
                 view["pipe"] = runtime.Proc == null ? "" : runtime.Proc.PipeName;
                 view["replica"] = runtime.ReplicaState;
+                view["idle"] = runtime.Idle != null && !runtime.Idle.HasExited;
 
                 list.Add(view);
             }
@@ -171,6 +176,7 @@ namespace Hv86.Vm
             view["pipe"] = runtime.Proc == null ? "" : runtime.Proc.PipeName;
             view["replica"] = runtime.ReplicaState;
             view["replica_alive"] = runtime.Replica != null && !runtime.Replica.HasExited;
+            view["idle"] = runtime.Idle != null && !runtime.Idle.HasExited;
             return view;
         }
 
@@ -348,10 +354,45 @@ namespace Hv86.Vm
 
             VmProcess process = null;
 
+            // окно уже открыто для выключенной ВМ - грузим гостя в него,
+            // второй процесс на тот же канал поднять нельзя
+            VmProcess idle;
+            lock (_gate)
+            {
+                idle = runtime.Idle;
+                runtime.Idle = null;
+            }
+
+            if (idle != null)
+            {
+                if (idle.HasExited)
+                {
+                    idle.Dispose();
+                }
+                else
+                {
+                    try
+                    {
+                        await idle.Client.CallForResultAsync("vm.boot", null, 120000).ConfigureAwait(false);
+                        process = idle;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("VM", "открытое окно не приняло загрузку, запускаю заново: " + ex.Message);
+
+                        try { idle.Kill(); } catch { }
+                        idle.Dispose();
+                    }
+                }
+            }
+
             try
             {
-                process = await VmProcess.LaunchAsync(runtime.Def, showConsole, restorePath,
-                    (name, data) => OnVmEvent(id, name, data)).ConfigureAwait(false);
+                if (process == null)
+                {
+                    process = await VmProcess.LaunchAsync(runtime.Def, showConsole, restorePath,
+                        (name, data) => OnVmEvent(id, name, data)).ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
@@ -407,6 +448,7 @@ namespace Hv86.Vm
             VmRuntime runtime = Get(id);
             VmProcess process;
             VmProcess replica;
+            VmProcess idle;
 
             lock (_gate)
             {
@@ -419,6 +461,10 @@ namespace Hv86.Vm
                 runtime.Replica = null;
                 runtime.ReplicaState = "";
                 runtime.ReplicaStarting = false;
+
+                // окно, открытое для выключенной ВМ, тоже закрываем
+                idle = runtime.Idle;
+                runtime.Idle = null;
 
                 if (process == null || process.HasExited)
                 {
@@ -441,6 +487,13 @@ namespace Hv86.Vm
             }
 
             replica?.Dispose();
+
+            if (idle != null)
+            {
+                Log.Info("VM", "закрываю окно выключенной ВМ " + id);
+                try { idle.Kill(); } catch { }
+                idle.Dispose();
+            }
 
             if (process != null && !process.HasExited)
             {
@@ -538,17 +591,51 @@ namespace Hv86.Vm
             return Json.Obj("id", id, "chars", payload.Length);
         }
 
-        public async Task<object> ConsoleAsync(string id)
+        /// <summary>
+        /// Открыть консоль ВМ. `start=false` - как в Hyper-V: подключиться
+        /// можно и к выключенной, окно покажет «ВМ выключена» и кнопку Start.
+        /// Для web-движка это означает процесс без гостя (`--idle`), для
+        /// headless - просто окно интерфейса: оно живёт отдельно от движка.
+        /// </summary>
+        public async Task<object> ConsoleAsync(string id, bool start)
         {
             VmRuntime runtime = Get(id);
 
-            if (runtime.Proc == null || runtime.Proc.HasExited)
+            if (runtime.Proc != null && !runtime.Proc.HasExited)
             {
-                await StartAsync(id, true, null).ConfigureAwait(false);
+                await Command(runtime, "vm.show").ConfigureAwait(false);
                 return runtime.Def.ToView();
             }
 
-            await Command(runtime, "vm.show").ConfigureAwait(false);
+            // уже открытое окно без гостя: просто показываем
+            VmProcess idle;
+            lock (_gate) idle = runtime.Idle;
+
+            if (idle != null && !idle.HasExited)
+            {
+                await idle.Client.CallForResultAsync("vm.show", null, 15000).ConfigureAwait(false);
+                return runtime.Def.ToView();
+            }
+
+            if (!start)
+            {
+                if (runtime.Def.IsHeadless)
+                {
+                    // консоль headless - окно интерфейса, ему движок не нужен,
+                    // оно само подключится, когда ВМ запустят
+                    return runtime.Def.ToView();
+                }
+
+                VmProcess fresh = await VmProcess.LaunchAsync(runtime.Def, true, null,
+                    (name, data) => OnVmEvent(id, name, data), false, 0, true).ConfigureAwait(false);
+
+                lock (_gate) runtime.Idle = fresh;
+
+                Log.Info("VM", "окно консоли открыто без запуска ВМ: " + id);
+                return runtime.Def.ToView();
+            }
+
+            await StartAsync(id, true, null).ConfigureAwait(false);
             return runtime.Def.ToView();
         }
 
@@ -914,6 +1001,15 @@ namespace Hv86.Vm
         private void TickOne(VmRuntime runtime)
         {
             VmDefinition def = runtime.Def;
+
+            // окно выключенной ВМ: процесс живёт сам по себе, и если закрылся -
+            // просто забываем его, ВМ всё равно не запущена
+            if (runtime.Idle != null && runtime.Idle.HasExited)
+            {
+                try { runtime.Idle.Dispose(); } catch { }
+
+                lock (_gate) runtime.Idle = null;
+            }
 
             if (def.State == "stopped" || def.State == "failed" || def.State == "stopping") return;
 
@@ -1414,6 +1510,7 @@ namespace Hv86.Vm
             {
                 try
                 {
+                    VmProcess idle;
                     // реплику гасим всегда, даже если основная уже мертва
                     VmProcess replica;
                     lock (_gate)
@@ -1421,6 +1518,15 @@ namespace Hv86.Vm
                         replica = runtime.Replica;
                         runtime.Replica = null;
                         runtime.ReplicaState = "";
+
+                        idle = runtime.Idle;
+                        runtime.Idle = null;
+                    }
+
+                    if (idle != null)
+                    {
+                        idle.Kill();
+                        idle.Dispose();
                     }
 
                     if (replica != null)

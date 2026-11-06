@@ -52,7 +52,8 @@ namespace Hv86.Vm
         // --------------------------------------------------------------- запуск
 
         public static async Task<VmProcess> LaunchAsync(VmDefinition vm, bool showConsole, string restorePath,
-            Action<string, Dictionary<string, object>> onEvent, bool replica = false, int relayPort = 0)
+            Action<string, Dictionary<string, object>> onEvent, bool replica = false, int relayPort = 0,
+            bool idle = false)
         {
             if (vm == null) throw new Hv86Exception("ВМ не найдена");
 
@@ -74,6 +75,10 @@ namespace Hv86.Vm
 
                 if (!string.IsNullOrEmpty(restorePath))
                     arguments += " --restore \"" + restorePath + "\"";
+
+                // окно без гостя: ВМ выключена, но к ней можно "подключиться"
+                if (idle)
+                    arguments += " --idle";
 
                 if (replica)
                 {
@@ -240,7 +245,7 @@ namespace Hv86.Vm
                     Dictionary<string, object> status = result as Dictionary<string, object>;
                     string state = Json.GetString(status, "state", "");
 
-                    if (state == "running" || state == "paused") return;
+                    if (state == "running" || state == "paused" || state == "idle") return;
                     if (state == "failed")
                         throw new Hv86Exception(Json.GetString(status, "error", "эмулятор не запустился"));
                 }

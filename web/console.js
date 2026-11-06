@@ -46,7 +46,65 @@
     var acks = new Map();
     var tcpSessions = new Map();
 
-    // ------------------------------------------------------------- утилиты
+    var scaleMode = "1";          // "1" | "2" | "fit"
+    var appliedScale = 1;
+    var nativeSize = { w: 0, h: 0 };
+
+    // ---------------------------------------------------------------- масштаб
+
+    // Масштабируем через сам v86 (screen_set_scale): он же пересчитывает
+    // координаты мыши. Своим CSS-transform пришлось бы дублировать его математику.
+    function applyScale() {
+        if (!emu) return;
+
+        var wrap = document.querySelector(".screen-wrap");
+        if (!wrap) return;
+
+        var k = 1;
+
+        if (scaleMode === "fit") {
+            if (nativeSize.w > 0 && nativeSize.h > 0) {
+                var w = wrap.clientWidth - 10;
+                var h = wrap.clientHeight - 10;
+                if (w > 0 && h > 0) k = Math.min(w / nativeSize.w, h / nativeSize.h);
+            }
+        } else {
+            k = Number(scaleMode) || 1;
+        }
+
+        k = Math.max(0.25, Math.min(6, k));
+
+        try { emu.screen_set_scale(k, k); } catch (e) { return; }
+
+        appliedScale = k;
+        markScale();
+    }
+
+    function markScale() {
+        var names = { "1": "scale-1", "2": "scale-2", fit: "scale-fit" };
+        var active = names[scaleMode] || "scale-1";
+
+        var buttons = document.querySelectorAll("[data-cmd^='scale-']");
+        for (var i = 0; i < buttons.length; i++)
+            buttons[i].classList.toggle("on", buttons[i].getAttribute("data-cmd") === active);
+    }
+
+    function measureNative() {
+        var cont = byId("screen_container");
+        if (!cont || !appliedScale) return;
+
+        var w = cont.scrollWidth / appliedScale;
+        var h = cont.scrollHeight / appliedScale;
+
+        if (w > 0 && h > 0) nativeSize = { w: w, h: h };
+    }
+
+    function setScaleMode(mode) {
+        scaleMode = mode;
+        applyScale();
+    }
+
+    // --------------------------------------------------------------- утилиты
 
     // ------------------------------------------------------- egress (fetch)
 
@@ -114,7 +172,13 @@
     function setState(next, detail) {
         state = next;
         var dot = byId("dot");
-        dot.className = "dot " + (next === "running" ? "running" : next === "failed" ? "failed" : "paused");
+
+        var kind = next === "running" ? "running" :
+                   next === "failed" ? "failed" :
+                   next === "stopped" ? "stopped" :
+                   next === "paused" ? "paused" : "paused";
+
+        dot.className = "dot " + kind;
         byId("stat").textContent = detail || next;
         post({ action: "state", state: next });
     }
@@ -178,6 +242,8 @@
 
     async function boot(c) {
         config = c;
+
+        hideIdle();
 
         byId("vm-name").textContent = c.name || c.id || "VM";
         byId("vm-id").textContent = c.id || "";
@@ -244,6 +310,16 @@
 
         emu.add_listener("screen-set-size", function (size) {
             post({ action: "log", text: "screen " + size[0] + "x" + size[1] + "x" + size[2] });
+
+            // v86 сам ставит 2x для мелких экранов, а нам нужен свой масштаб:
+            // возвращаем 1:1, запоминаем родной размер и применяем выбранный
+            try { emu.screen_set_scale(1, 1); } catch (e) { }
+            appliedScale = 1;
+
+            requestAnimationFrame(function () {
+                measureNative();
+                applyScale();
+            });
         });
 
         emu.add_listener("mouse-enable", function (enabled) {
@@ -323,6 +399,25 @@
     }
 
     // ------------------------------------------------------------ уничтожение
+
+    // Окно консоли можно открыть и для выключенной ВМ (как в Hyper-V):
+    // движок присылает "idle", показываем экран "выключена" и кнопку Start
+    function showIdle(message) {
+        var idle = byId("idle");
+        if (idle) idle.classList.remove("hidden");
+
+        if (message) {
+            byId("vm-name").textContent = message.name || message.id || "VM";
+            byId("vm-id").textContent = message.id || "";
+        }
+
+        setState("stopped", "off");
+    }
+
+    function hideIdle() {
+        var idle = byId("idle");
+        if (idle) idle.classList.add("hidden");
+    }
 
     async function destroy() {
         tcpCloseAll();
@@ -477,6 +572,13 @@
     // ------------------------------------------------------------- команды
 
     function command(cmd) {
+        // Start доступен и без эмулятора: окно может быть открыто для
+        // выключенной ВМ, гостя в нём ещё нет
+        if (cmd === "start") {
+            post({ action: "ctrl", cmd: "start" });
+            return;
+        }
+
         if (!emu) return;
 
         try {
@@ -512,6 +614,18 @@
 
                 case "paste":
                     post({ action: "paste" });
+                    break;
+
+                case "scale-1":
+                    setScaleMode("1");
+                    break;
+
+                case "scale-2":
+                    setScaleMode("2");
+                    break;
+
+                case "scale-fit":
+                    setScaleMode("fit");
                     break;
             }
         } catch (e) {
@@ -560,12 +674,38 @@
                 destroy();
                 break;
 
+            case "idle":
+                showIdle(message);
+                break;
+
             case "type":
                 typeText(message);
                 break;
 
-            // диагностика egress: страница делает настоящий fetch через
-            // обёртку и сообщает, что из этого вышло
+            // диагностика масштаба: применяем режим и отдаём реальный размер экрана
+            case "scaleProbe":
+            {
+                var mode = message.mode || "1";
+                setScaleMode(mode);
+
+                requestAnimationFrame(function () {
+                    var cont = byId("screen_container");
+                    var rect = cont ? cont.getBoundingClientRect() : { width: 0, height: 0 };
+
+                    post({
+                        action: "scaleResult",
+                        mode: mode,
+                        scale: appliedScale,
+                        width: Math.round(rect.width),
+                        height: Math.round(rect.height),
+                        wrap: (function () {
+                            var wrap = document.querySelector(".screen-wrap");
+                            return wrap ? wrap.clientWidth + "x" + wrap.clientHeight : "";
+                        })()
+                    });
+                });
+                break;
+            }
             case "fetchProbe":
                 fetch(message.url)
                     .then(function (response) {
@@ -655,7 +795,14 @@
         post({ action: "paste" });
     }, true);
 
-    var buttons = document.querySelectorAll(".cbtn");
+    markScale();
+
+    // «Fit» должен пересчитываться при изменении размера окна
+    window.addEventListener("resize", function () {
+        if (scaleMode === "fit") applyScale();
+    });
+
+    var buttons = document.querySelectorAll("[data-cmd]");
     for (var i = 0; i < buttons.length; i++) {
         buttons[i].addEventListener("click", function () {
             command(this.getAttribute("data-cmd"));

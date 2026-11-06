@@ -110,7 +110,8 @@ namespace Hv86.App
                         Json.GetBool(parameters, "enter", false)).ConfigureAwait(false);
 
                 case "vm.console":
-                    return await _manager.ConsoleAsync(id).ConfigureAwait(false);
+                    return await _manager.ConsoleAsync(id, Json.GetBool(parameters, "start", true))
+                        .ConfigureAwait(false);
 
                 case "vm.hide":
                     return await _manager.HideAsync(id).ConfigureAwait(false);

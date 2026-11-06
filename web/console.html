@@ -22,6 +22,7 @@ body.console {
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #f0b429; box-shadow: 0 0 6px #f0b42988; }
 .dot.running { background: #35d07f; box-shadow: 0 0 8px #35d07f99; }
 .dot.paused  { background: #f0b429; }
+.dot.stopped { background: #4a5a6e; box-shadow: none; }
 .dot.failed  { background: #ff5c5c; box-shadow: 0 0 8px #ff5c5c99; }
 .vm-name { font-weight: 600; font-size: 13px; }
 .vm-id { color: #6f8199; font-family: Consolas, monospace; font-size: 11px; }
@@ -33,6 +34,8 @@ body.console {
   padding: 0;
 }
 .cbtn svg { display: block; }
+.cbtn.txt { width: auto; min-width: 30px; padding: 0 7px; font: 11px/1 "Segoe UI", system-ui, sans-serif; }
+.cbtn.on { background: #1d3550; border-color: #3f6690; color: #dceaff; }
 .cbtn:hover:not(:disabled) { background: #1a2634; border-color: #33506e; }
 .cbtn:disabled { opacity: .35; cursor: default; }
 .cbtn.danger:hover:not(:disabled) { border-color: #7a2c2c; color: #ff9d9d; }
@@ -41,6 +44,20 @@ body.console {
 .screen-wrap { flex: 1 1 auto; overflow: auto; display: flex; align-items: center; justify-content: center; background: #05070b; }
 .screen { background: #000; line-height: 0; }
 .screen canvas { image-rendering: pixelated; }
+.screen-wrap { position: relative; }
+.idle {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 10px;
+  background: #05070b; color: #7f93ab; text-align: center; padding: 24px;
+}
+.idle.hidden { display: none; }
+.idle-title { font-size: 15px; color: #dbe6f7; }
+.idle-text { font-size: 12px; max-width: 420px; line-height: 1.5; }
+.idle-btn {
+  margin-top: 6px; padding: 7px 22px; border-radius: 7px; cursor: pointer;
+  border: 1px solid #2c5c8f; background: #14293d; color: #cfe4ff; font: 12px "Segoe UI", sans-serif;
+}
+.idle-btn:hover { background: #1a3752; border-color: #3f7cb8; }
 .con-bottom {
   display: flex; justify-content: space-between; padding: 3px 10px;
   background: #0d1219; border-top: 1px solid #1b2735;
@@ -93,6 +110,10 @@ body.console {
       </svg>
     </button>
     <span class="sep"></span>
+    <button class="cbtn txt" data-cmd="scale-1" title="Scale 1:1" aria-label="Scale 1:1">1×</button>
+    <button class="cbtn txt" data-cmd="scale-2" title="Scale 2:1" aria-label="Scale 2:1">2×</button>
+    <button class="cbtn txt" data-cmd="scale-fit" title="Fit to window" aria-label="Fit to window">Fit</button>
+    <span class="sep"></span>
     <button class="cbtn danger" data-cmd="hide" title="Hide window (VM keeps running)" aria-label="Hide window">
       <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
         <path d="M4 4l8 8M12 4l-8 8"/>
@@ -106,6 +127,13 @@ body.console {
   <div id="screen_container" class="screen">
     <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
     <canvas style="display: none"></canvas>
+  </div>
+
+  <!-- ВМ ещё не запущена: окно можно открыть и на выключенной (как в Hyper-V) -->
+  <div id="idle" class="idle hidden">
+    <div class="idle-title">Virtual machine is off</div>
+    <div class="idle-text">Connect works on a stopped VM too: press Start to boot it right here.</div>
+    <button class="idle-btn" data-cmd="start">Start</button>
   </div>
 </div>
 

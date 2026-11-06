@@ -110,7 +110,7 @@ namespace Hv86.App
                     return Simple(client, positional, "vm.reset", "перезагружена", "running", json);
 
                 case "console":
-                    return Simple(client, positional, "vm.console", "окно консоли открыто", null, json);
+                    return ConsoleWindow(client, positional, json);
 
                 case "delete":
                     return Delete(client, positional, json);
@@ -349,6 +349,25 @@ namespace Hv86.App
             else
                 Console.WriteLine("введено " + Json.GetInt(result, "chars", 0) + " символов (" +
                                   (enter ? "с Enter" : "без Enter") + ")");
+
+            return 0;
+        }
+
+        /// <summary>
+        /// Открыть консоль. ВМ сама не запускается: окно покажет «выключена»
+        /// и кнопку Start - как в Hyper-V.
+        /// </summary>
+        private static int ConsoleWindow(PipeClient client, List<string> positional, bool json)
+        {
+            string id = ResolveId(client, Positional(positional, 1));
+
+            Dictionary<string, object> view = Result(client, "vm.console",
+                Json.Obj("id", id, "start", false), 120000) as Dictionary<string, object>;
+
+            if (json) Console.WriteLine(Json.Pretty(view));
+            else
+                Console.WriteLine("окно консоли открыто (ВМ: " +
+                                  Json.GetString(view, "state", "") + ")");
 
             return 0;
         }

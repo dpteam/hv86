@@ -381,19 +381,17 @@ namespace Hv86.App
 
                 string engine = Json.GetString(view, "engine", "web");
                 string name = Json.GetString(view, "name", id);
-                string state = Json.GetString(view, "state", "");
                 string pipe = Json.GetString(view, "pipe", "");
 
+                // «Подключиться» больше не запускает ВМ: как в Hyper-V, окно
+                // можно открыть и для выключенной, а старт - отдельной кнопкой
                 if (engine == "headless")
                 {
                     OpenHeadlessConsole(id, name, pipe);
-
-                    if (state == "stopped" || state == "failed")
-                        await CallService("vm.start", Json.Obj("id", id), 180000);
                 }
                 else
                 {
-                    await CallService("vm.console", Json.Obj("id", id), 180000);
+                    await CallService("vm.console", Json.Obj("id", id, "start", false), 120000);
                 }
 
                 await PushStateAsync();

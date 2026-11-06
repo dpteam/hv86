@@ -58,9 +58,10 @@ namespace Hv86.App
 
             Panel toolbar = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Color.FromArgb(0x0D, 0x12, 0x19) };
 
-            Button pause = MakeButton("Пауза", 6, delegate { Send("vm.pause"); });
-            Button resume = MakeButton("Продолжить", 92, delegate { Send("vm.resume"); });
-            Button reset = MakeButton("Перезагрузка", 178, delegate { Send("vm.reset"); });
+            Button start = MakeButton("Запустить", 6, delegate { StartVm(); });
+            Button pause = MakeButton("Пауза", 106, delegate { Send("vm.pause"); });
+            Button resume = MakeButton("Продолжить", 192, delegate { Send("vm.resume"); });
+            Button reset = MakeButton("Перезагрузка", 278, delegate { Send("vm.reset"); });
 
             _pauseButton = pause;
 
@@ -75,6 +76,7 @@ namespace Hv86.App
                 Text = "подключение…"
             };
 
+            toolbar.Controls.Add(start);
             toolbar.Controls.Add(pause);
             toolbar.Controls.Add(resume);
             toolbar.Controls.Add(reset);
@@ -260,6 +262,38 @@ namespace Hv86.App
         }
 
         // ------------------------------------------------------------ команды
+
+        /// <summary>
+        /// Запуск выключенной ВМ из окна консоли: сама ВМ принадлежит службе,
+        /// поэтому просим её, а окно потом само подключится к движку.
+        /// </summary>
+        private async void StartVm()
+        {
+            _status.Text = "запускаю…";
+
+            try
+            {
+                using (PipeClient service = new PipeClient(PipeNames.Service))
+                {
+                    if (!await service.ConnectAsync(3000).ConfigureAwait(false))
+                    {
+                        _status.Text = "служба не отвечает";
+                        return;
+                    }
+
+                    await service.CallForResultAsync("vm.start", Json.Obj("id", _vmId), 180000)
+                        .ConfigureAwait(false);
+                }
+
+                _reconnect.Start();
+                await EnsureConnectedAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("CONSOLE", "start: " + ex.Message);
+                _status.Text = "не удалось запустить: " + ex.Message;
+            }
+        }
 
         private async void Send(string method)
         {

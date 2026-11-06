@@ -145,6 +145,37 @@ namespace Hv86.App
                 else
                     Fail("web keyboard input failed: " + Json.Stringify(typed));
 
+                // масштаб экрана консоли: 1x / 2x / fit (через screen_set_scale v86)
+                Dictionary<string, object> size1 = CallVm(id, "vm.debug.scale", Json.Obj("mode", "1"), 30000);
+                Dictionary<string, object> size2 = CallVm(id, "vm.debug.scale", Json.Obj("mode", "2"), 30000);
+
+                int w1 = Json.GetInt(size1, "width", 0);
+                int w2 = Json.GetInt(size2, "width", 0);
+
+                if (w1 > 0 && w2 >= w1 * 2 - 4)
+                    Ok("console scale", "1x=" + w1 + "px, 2x=" + w2 + "px");
+                else
+                    Fail("console scale did not apply: " + Json.Stringify(size1) + " -> " + Json.Stringify(size2));
+
+                Dictionary<string, object> fit = CallVm(id, "vm.debug.scale", Json.Obj("mode", "fit"), 30000);
+
+                double fitValue = 0;
+                if (fit != null && fit.ContainsKey("scale"))
+                    double.TryParse(Json.Stringify(fit["scale"]).Trim('"'),
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out fitValue);
+
+                // fit обязан дать дробный масштаб (окно не кратно экрану),
+                // иначе это не fit, а обычный 1x/2x
+                if (fit != null && Json.GetInt(fit, "width", 0) > 0 && fitValue > 0.1 && fitValue < 1.99)
+                    Ok("console fit", "fit scale " +
+                        fitValue.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) +
+                        ", " + Json.GetInt(fit, "width", 0) + "px inside " + Json.GetString(fit, "wrap", ""));
+                else
+                    Fail("console fit did not compute a scale: " + Json.Stringify(fit));
+
+                CallVm(id, "vm.debug.scale", Json.Obj("mode", "1"), 30000);
+
                 string forwardResult = ProbeForward("127.0.0.1", forwardPort, 45000);
                 Ok("port forward", forwardResult);
 
@@ -481,8 +512,41 @@ namespace Hv86.App
                 else
                     Fail("diagnostics zip was not created");
 
+                // ---- подключение к выключенной ВМ: окно открывается, гостя внутри нет,
+                // а запуск грузит гостя в это же окно (как в Hyper-V)
+                Dictionary<string, object> idleVm = Call(client, "vm.create", Json.Obj(
+                    "name", "itest-idle", "preset", "freedos", "memory_mb", 32, "disk_mb", 0), 300000);
+
+                string idleId = Json.GetString(idleVm, "id", "");
+
+                Call(client, "vm.console", Json.Obj("id", idleId, "start", false), 180000);
+                System.Threading.Thread.Sleep(500);
+
+                Dictionary<string, object> idleView = Call(client, "vm.get", Json.Obj("id", idleId));
+
+                if (Json.GetString(idleView, "state", "") == "stopped" && Json.GetBool(idleView, "idle", false))
+                    Ok("console on a stopped VM", "window opened, guest not booted");
+                else
+                    Fail("console start:false did not open an idle window: " + Json.Stringify(idleView));
+
+                int idlePid = Json.GetInt(CallVm(idleId, "vm.status", null), "pid", 0);
+
+                Call(client, "vm.start", Json.Obj("id", idleId), 180000);
+                WaitState(client, idleId, "running", 180000);
+
+                int runningPid = Json.GetInt(CallVm(idleId, "vm.status", null), "pid", 0);
+
+                if (idlePid > 0 && runningPid == idlePid)
+                    Ok("boot into the open window", "same process, pid " + runningPid);
+                else
+                    Fail("VM was started in a new process instead of the idle window: " +
+                         idlePid + " -> " + runningPid);
+
+                Call(client, "vm.stop", Json.Obj("id", idleId), 180000);
+                WaitState(client, idleId, "stopped", 60000);
+
                 // ---- удаление
-                foreach (string victim in new[] { importedId, cloneId, id })
+                foreach (string victim in new[] { importedId, cloneId, id, idleId })
                     Call(client, "vm.delete", Json.Obj("id", victim), 120000);
 
                 object remaining = CallRaw(client, "vm.list", null);
