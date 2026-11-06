@@ -112,6 +112,9 @@ namespace Hv86.App
                 case "console":
                     return ConsoleWindow(client, positional, json);
 
+                case "screen":
+                    return ScreenText(client, positional, json);
+
                 case "delete":
                     return Delete(client, positional, json);
 
@@ -368,6 +371,49 @@ namespace Hv86.App
             else
                 Console.WriteLine("окно консоли открыто (ВМ: " +
                                   Json.GetString(view, "state", "") + ")");
+
+            return 0;
+        }
+
+        /// <summary>
+        /// Текст с экрана headless-ВМ: единственный способ увидеть гостя из
+        /// консоли (у web-движка экран рисует WebView2, там `vm.screen` нет).
+        /// </summary>
+        private static int ScreenText(PipeClient client, List<string> positional, bool json)
+        {
+            string id = ResolveId(client, Positional(positional, 1));
+
+            Dictionary<string, object> view = Result(client, "vm.get", Json.Obj("id", id), 15000)
+                as Dictionary<string, object>;
+
+            string pipe = Json.GetString(view, "pipe", "");
+
+            if (pipe.Length == 0) throw new Hv86Exception("ВМ не запущена: экрана нет");
+
+            using (PipeClient vm = new PipeClient(pipe))
+            {
+                if (!vm.ConnectAsync(5000).GetAwaiter().GetResult())
+                    throw new Hv86Exception("движок ВМ не отвечает");
+
+                Dictionary<string, object> screen = vm.CallForResultAsync("vm.screen", null, 15000)
+                    .GetAwaiter().GetResult() as Dictionary<string, object>;
+
+                if (json)
+                {
+                    Console.WriteLine(Json.Pretty(screen));
+                    return 0;
+                }
+
+                List<object> lines = Json.GetList(screen, "lines");
+
+                if (lines == null)
+                {
+                    Console.WriteLine("(экран недоступен: vm.screen есть только у headless-движка)");
+                    return 0;
+                }
+
+                foreach (object line in lines) Console.WriteLine(AnsiText.Strip(line as string ?? ""));
+            }
 
             return 0;
         }
@@ -669,6 +715,7 @@ namespace Hv86.App
             Console.WriteLine("  hv86 --cli snapshots <vm>            список снапшотов");
             Console.WriteLine("  hv86 --cli revert <vm> <снапшот>     откатить");
             Console.WriteLine("  hv86 --cli type <vm> \"текст\" [--enter]   набрать в госте");
+            Console.WriteLine("  hv86 --cli screen <vm>               текст с экрана (headless)");
             Console.WriteLine("  hv86 --cli create --name <имя> --preset <id> [--memory МБ] [--disk МБ] [--net relay] [--engine headless] [--share C:\\dir]");
             Console.WriteLine("  hv86 --cli create --name <имя> --iso <файл>");
             Console.WriteLine("  hv86 --cli export <vm> [файл.hv86x]");

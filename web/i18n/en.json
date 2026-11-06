@@ -74,6 +74,9 @@
   "new.autostart": "Start with the service",
   "new.noPreset": "— no preset, my own image —",
   "new.noPresetHint": "Pick an ISO/IMG file below or create an empty disk.",
+  "new.sourceOwn": "Ready to use (verified)",
+  "new.sourceCopy": "copy.sh/v86 catalog",
+  "new.copyNote": "Image from the v86 demo stand: downloaded on create. If it does not boot, try more memory.",
   "new.needSource": "A preset or an image file is required",
   "new.creating": "Creating VM…",
 

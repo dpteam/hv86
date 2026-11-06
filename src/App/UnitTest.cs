@@ -36,6 +36,7 @@ namespace Hv86.App
                 TestAnsi();
                 TestEgress();
                 TestEgressGate();
+                TestPresets();
                 TestShare(dir);
             }
             catch (Exception ex)
@@ -264,6 +265,52 @@ namespace Hv86.App
                 "gate: allowlist respects port");
             Check(!Json.GetBool(gate.Decide("https://192.0.2.78/"), "allow", true),
                 "gate: allowlist denies other ip");
+        }
+
+        /// <summary>
+        /// Каталог пресетов: два источника (свои + copy.sh), id не пересекаются,
+        /// у каждой записи есть url/медиа/загрузка/память, а свои пресеты
+        /// обязательно с закреплённым SHA-256.
+        /// </summary>
+        private static void TestPresets()
+        {
+            List<Dictionary<string, object>> presets = PresetCatalog.All();
+
+            HashSet<string> ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            int ownCount = 0, copyCount = 0, bad = 0;
+            bool ownHashed = true;
+
+            foreach (Dictionary<string, object> preset in presets)
+            {
+                string id = Json.GetString(preset, "id", "");
+                string url = Json.GetString(preset, "url", "");
+                string kind = Json.GetString(preset, "kind", "");
+                string boot = Json.GetString(preset, "boot", "");
+                string source = Json.GetString(preset, "source", "");
+
+                if (id.Length == 0 || !ids.Add(id)) bad++;
+                if (url.Length == 0 || boot.Length == 0) bad++;
+                if (kind != "fda" && kind != "hda" && kind != "cdrom") bad++;
+                if (Json.GetInt(preset, "memory_mb", 0) <= 0) bad++;
+
+                if (source == "copy.sh")
+                {
+                    copyCount++;
+                }
+                else
+                {
+                    ownCount++;
+
+                    if (Json.GetString(preset, "sha256", "").Length != 64) ownHashed = false;
+                }
+            }
+
+            Check(presets.Count > 100, "presets: catalog size (" + presets.Count + " entries)");
+            Check(bad == 0, "presets: ids and fields (" + bad + " invalid)");
+            Check(ownCount >= 5 && copyCount > 100,
+                "presets: two catalogs (" + ownCount + " own + " + copyCount + " copy.sh)");
+            Check(ownHashed, "presets: own entries are hash-pinned");
         }
 
         private static void TestShare(string dir)

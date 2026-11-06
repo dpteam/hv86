@@ -123,6 +123,12 @@
       <LogicalName>Hv86.Assets.presets.json</LogicalName>
     </EmbeddedResource>
 
+    <!-- каталог с copy.sh/v86: только метаданные (url/размер/медиа), образы
+         качаются по требованию, ничего не кладём в репозиторий -->
+    <EmbeddedResource Include="assets\presets-copy.json">
+      <LogicalName>Hv86.Assets.presets-copy.json</LogicalName>
+    </EmbeddedResource>
+
     <!-- Иконка: одна на exe, окна, трей и визард (tools\make-icon.ps1) -->
     <EmbeddedResource Include="assets\hv86.ico">
       <LogicalName>Hv86.Assets.hv86.ico</LogicalName>

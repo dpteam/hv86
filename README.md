@@ -49,7 +49,11 @@
   `Ctrl+V` вставляет текст из буфера обмена хоста (раскладка US).
 - **Диски**: raw-образы (sparse), изменения гостя сохраняются на диск при штатной
   остановке; при падении образ остаётся целым, ВМ откатывается к чекпоинту.
-- **Пресеты**: FreeDOS, KolibriOS, Oberon, TinyCore, Linux — скачивание с проверкой SHA-256.
+- **Пресеты**: свои проверенные (FreeDOS, KolibriOS, Oberon, TinyCore, Linux) плюс
+  весь каталог демо-стенда **copy.sh/v86** — 118 систем от boot-секторных игр до
+  Windows 98 и Haiku; образы качаются по требованию, в репозиторий не кладутся.
+  Каждый скачанный образ проверяется по SHA-256 (у образов copy.sh хэш
+  закрепляется при первой загрузке).
 
 ## Быстрый старт
 
@@ -101,6 +105,7 @@ hv86 --cli snapshot dev before-update
 hv86 --cli snapshots dev
 hv86 --cli revert dev 0001-before-update
 hv86 --cli type dev "dir" --enter
+hv86 --cli screen dev            :: текст с экрана (только headless-движок)
 hv86 --cli stop dev
 hv86 --cli export dev D:\backup\dev.hv86x
 hv86 --cli import D:\backup\dev.hv86x

@@ -344,13 +344,24 @@
         var select = byId("newPreset");
         select.innerHTML = '<option value="">' + esc(T("new.noPreset")) + '</option>';
 
+        // два каталога: свои пресеты и образы copy.sh/v86 (их 100+)
+        var own = document.createElement("optgroup");
+        own.label = T("new.sourceOwn");
+
+        var copy = document.createElement("optgroup");
+        copy.label = T("new.sourceCopy");
+
         for (var i = 0; i < state.presets.length; i++) {
             var preset = state.presets[i];
             var option = document.createElement("option");
             option.value = preset.id;
             option.textContent = preset.name + (preset.size ? " · " + fmtSize(preset.size) : "");
-            select.appendChild(option);
+
+            (preset.source === "copy.sh" ? copy : own).appendChild(option);
         }
+
+        if (own.childNodes.length) select.appendChild(own);
+        if (copy.childNodes.length) select.appendChild(copy);
     }
 
     function applyPreset() {
@@ -361,7 +372,9 @@
             if (state.presets[i].id === id) preset = state.presets[i];
         }
 
-        byId("newPresetHint").textContent = preset ? (preset.description || "") : T("new.noPresetHint");
+        byId("newPresetHint").textContent = preset
+            ? (preset.description || "") + (preset.source === "copy.sh" ? " " + T("new.copyNote") : "")
+            : T("new.noPresetHint");
 
         if (!preset) return;
 

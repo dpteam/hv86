@@ -195,7 +195,8 @@ namespace Hv86.Vm
                     "vga_memory_mb", Json.GetInt(preset, "vga_memory_mb", 8),
                     "disk_mb", Json.GetInt(preset, "disk_mb", 0),
                     "boot", Json.GetString(preset, "boot", "auto"),
-                    "size", Json.GetLong(preset, "size", 0)));
+                    "size", Json.GetLong(preset, "size", 0),
+                    "source", Json.GetString(preset, "source", "")));
             }
 
             return list;
@@ -239,6 +240,12 @@ namespace Hv86.Vm
             vm.Autostart = Json.GetBool(parameters, "autostart", false);
             vm.Engine = Json.GetString(parameters, "engine", "web") == "headless" ? "headless" : "web";
             vm.NetMode = Json.GetString(parameters, "net_mode", "nat") == "relay" ? "relay" : "nat";
+
+            // сетевая карта: у старых гостей (DOS/Windows) virtio нет вообще,
+            // поэтому в каталоге copy.sh по умолчанию ne2k - как на сайте
+            string presetNet = preset == null ? "" : Json.GetString(preset, "net", "");
+            if (presetNet == "virtio" || presetNet == "ne2k") vm.NetType = presetNet;
+            else if (preset != null && Json.GetString(preset, "source", "") == "copy.sh") vm.NetType = "ne2k";
 
             ApplyShare(vm, parameters);
             ApplyEgress(vm, parameters);

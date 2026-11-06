@@ -12,6 +12,11 @@ namespace Hv86.Vm
     /// Образ скачивается один раз в %ProgramData%\hv86\cache\presets и
     /// проверяется по SHA-256. Без совпадения хэша образ не используется -
     /// иначе «быстрый старт» однажды скачает что-нибудь совсем другое.
+    ///
+    /// Второй каталог (assets\presets-copy.json) - образы демо-стенда
+    /// copy.sh/v86: там 100+ систем, но у них нет хэшей. Для них работает
+    /// закрепление при первой загрузке: скачали, посчитали, записали рядом
+    /// `.sha256` и дальше сверяем - смена файла на сервере не пройдёт молча.
     /// </summary>
     public static class PresetCatalog
     {
@@ -19,25 +24,56 @@ namespace Hv86.Vm
         {
             List<Dictionary<string, object>> result = new List<Dictionary<string, object>>();
 
+            Append(result, Resources.Presets, null);
+            Append(result, Resources.PresetsCopy, "copy.sh");
+
+            return result;
+        }
+
+        private static void Append(List<Dictionary<string, object>> result, string resource, string source)
+        {
             try
             {
-                string text = Resources.Text(Resources.Presets);
+                string text = Resources.Text(resource);
+                if (string.IsNullOrEmpty(text)) return;
+
                 Dictionary<string, object> root = Json.ParseObjectSafe(text);
                 List<object> presets = Json.GetList(root, "presets");
+                if (presets == null) return;
 
-                if (presets != null)
-                    foreach (object item in presets)
+                foreach (object item in presets)
+                {
+                    Dictionary<string, object> preset = item as Dictionary<string, object>;
+                    if (preset == null) continue;
+
+                    // одинаковые id не должны перетирать друг друга: второй
+                    // каталог и так идёт с префиксом v86-, но проверим
+                    string id = Json.GetString(preset, "id", "");
+                    if (id.Length == 0) continue;
+
+                    bool exists = false;
+                    foreach (Dictionary<string, object> known in result)
+                        if (string.Equals(Json.GetString(known, "id", ""), id, StringComparison.OrdinalIgnoreCase))
+                        {
+                            exists = true;
+                            break;
+                        }
+
+                    if (exists)
                     {
-                        Dictionary<string, object> preset = item as Dictionary<string, object>;
-                        if (preset != null) result.Add(preset);
+                        Log.Warn("PRESET", "дубль id в каталоге: " + id);
+                        continue;
                     }
+
+                    if (source != null) preset["source"] = source;
+
+                    result.Add(preset);
+                }
             }
             catch (Exception ex)
             {
-                Log.Exception("PRESET", "каталог пресетов", ex);
+                Log.Exception("PRESET", "каталог " + resource, ex);
             }
-
-            return result;
         }
 
         public static Dictionary<string, object> Get(string id)
@@ -77,10 +113,23 @@ namespace Hv86.Vm
 
             if (File.Exists(path))
             {
-                if (string.IsNullOrEmpty(expected) || Matches(path, expected)) return path;
+                if (!string.IsNullOrEmpty(expected))
+                {
+                    if (Matches(path, expected)) return path;
 
-                Log.Warn("PRESET", "хэш кэша не совпал, качаю заново: " + fileName);
-                try { File.Delete(path); } catch { }
+                    Log.Warn("PRESET", "хэш кэша не совпал, качаю заново: " + fileName);
+                    try { File.Delete(path); } catch { }
+                }
+                else
+                {
+                    string pinned = ReadPinned(path);
+
+                    // хэш закрепили при первой загрузке - дальше сверяем его
+                    if (pinned.Length == 0 || Matches(path, pinned)) return path;
+
+                    Log.Warn("PRESET", "образ изменился с первой загрузки, качаю заново: " + fileName);
+                    try { File.Delete(path); } catch { }
+                }
             }
 
             string temp = path + ".part";
@@ -108,6 +157,10 @@ namespace Hv86.Vm
                         throw new Hv86Exception("хэш образа не совпал: образ не будет использован");
                     }
                 }
+                else
+                {
+                    PinHash(temp, path);
+                }
 
                 AtomicFile.Move(temp, path);
                 Log.Info("PRESET", "образ готов: " + path);
@@ -128,6 +181,41 @@ namespace Hv86.Vm
         {
             string actual = AtomicFile.Sha256(path);
             return string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Закрепляем хэш при первой загрузке. Нужно для каталога copy.sh: у его
+        /// образов хэша нет, а молча принимать любые байты с сервера - плохо.
+        /// Со второй загрузки сверяем сохранённый `.sha256`.
+        /// </summary>
+        private static void PinHash(string downloadedFile, string targetPath)
+        {
+            try
+            {
+                string hash = AtomicFile.Sha256(downloadedFile);
+
+                File.WriteAllText(targetPath + ".sha256", hash + Environment.NewLine,
+                    new System.Text.UTF8Encoding(false));
+
+                Log.Info("PRESET", "хэш закреплён при первой загрузке: " + hash);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("PRESET", "не удалось закрепить хэш: " + ex.Message);
+            }
+        }
+
+        private static string ReadPinned(string path)
+        {
+            try
+            {
+                string sidecar = path + ".sha256";
+                return File.Exists(sidecar) ? File.ReadAllText(sidecar).Trim() : "";
+            }
+            catch
+            {
+                return "";
+            }
         }
     }
 }

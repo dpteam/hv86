@@ -25,6 +25,9 @@ namespace Hv86.Core
         // Каталог пресетов
         public const string Presets = "Hv86.Assets.presets.json";
 
+        /// <summary>Каталог образов с copy.sh/v86 (генерируется tools\import-copy-sh.ps1).</summary>
+        public const string PresetsCopy = "Hv86.Assets.presets-copy.json";
+
         /// <summary>Читает текстовый ресурс. Нет ресурса - пустая строка, не null.</summary>
         public static string Text(string logicalName)
         {
