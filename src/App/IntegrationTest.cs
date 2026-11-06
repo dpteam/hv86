@@ -64,11 +64,17 @@ namespace Hv86.App
                         Console.WriteLine("  event " + name + ": " + Json.Stringify(data));
                 };
 
+                string shareDir = Path.Combine(root, "share");
+                Directory.CreateDirectory(shareDir);
+                File.WriteAllText(Path.Combine(shareDir, "hello.txt"), "hv86");
+
                 Dictionary<string, object> created = Call(client, "vm.create", Json.Obj(
                     "name", "itest-freedos",
                     "preset", "freedos",
                     "memory_mb", 32,
-                    "disk_mb", 0));
+                    "disk_mb", 0,
+                    "share_path", shareDir,
+                    "share_readonly", true));
 
                 string id = Json.GetString(created, "id", "");
                 Ok("vm.create", id);
@@ -92,6 +98,33 @@ namespace Hv86.App
                 WaitInstructions(client, id, 1000000, 60000);
                 Ok("guest executing", "instructions=" + Json.GetLong(Call(client, "vm.get", Json.Obj("id", id)),
                     "instructions", 0));
+
+                // web-движок: общая папка через синхронный XHR к /share.
+                // Проверяем transport и настоящий stat файла из шары.
+                // Команда живёт в vmhost, поэтому идём прямо в его канал.
+                Dictionary<string, object> xhr = null;
+
+                using (PipeClient vmPipe = new PipeClient(PipeNames.VmHost(id)))
+                {
+                    if (!vmPipe.ConnectAsync(5000).GetAwaiter().GetResult())
+                        Fail("cannot connect to the vm pipe for the xhr probe");
+                    else
+                        xhr = vmPipe.CallForResultAsync("vm.debug.xhr", null, 30000).GetAwaiter().GetResult()
+                            as Dictionary<string, object>;
+                }
+
+                string xhrBody = Json.GetString(xhr, "body", "");
+
+                if (xhr != null && Json.GetBool(xhr, "ok", false) &&
+                    xhrBody.IndexOf("\"size\"", StringComparison.Ordinal) >= 0)
+                    Ok("web 9p transport", "sync XHR /share works: " + xhrBody);
+                else
+                    Fail("sync XHR /share failed: " + Json.Stringify(xhr));
+
+                if (xhr != null && Json.GetBool(xhr, "filesystem", false))
+                    Ok("web 9p handler", "fs9p/fs-xhr modules loaded in the page");
+                else
+                    Fail("9p modules did not load in the console page");
 
                 string forwardResult = ProbeForward("127.0.0.1", forwardPort, 45000);
                 Ok("port forward", forwardResult);

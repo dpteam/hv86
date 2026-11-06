@@ -44,6 +44,9 @@ namespace Hv86.VmHost
         /// <summary>Имя state-файла -> абсолютный путь (или null, если нельзя).</summary>
         public Func<string, string> StatePath;
 
+        /// <summary>Общая папка web-движка (9p через синхронные POST).</summary>
+        public ShareFileServer Share;
+
         /// <summary>Готовая страница консоли (с вшитыми css/js).</summary>
         public string ConsoleHtml = "";
 
@@ -74,6 +77,41 @@ namespace Hv86.VmHost
                 {
                     byte[] bytes = Encoding.UTF8.GetBytes(ConsoleHtml ?? "");
                     e.Response = BytesResponse(bytes, 200, "OK", "text/html; charset=utf-8");
+                    return;
+                }
+
+                // 9p-шарa для web-движка: каждая операция с файлом - один
+                // синхронный POST сюда (handle9p в v86 синхронный)
+                if (path == "/share" && string.Equals(e.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    HandleShare(e);
+                    return;
+                }
+
+                if (path == "/share/ping")
+                {
+                    e.Response = BytesResponse(Encoding.UTF8.GetBytes("{\"ok\":true}"), 200, "OK", "application/json");
+                    return;
+                }
+
+                // модули 9p для страницы (общая папка web-движка)
+                if (path.StartsWith("/engine/", StringComparison.OrdinalIgnoreCase))
+                {
+                    string name = path.Substring("/engine/".Length);
+
+                    if (name.IndexOf('/') < 0 && name.IndexOf("..", StringComparison.Ordinal) < 0 &&
+                        name.EndsWith(".mjs", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string file = System.IO.Path.Combine(Hv86.Core.Paths.EngineDir, name);
+
+                        if (File.Exists(file))
+                        {
+                            ServeFile(e, file, "text/javascript; charset=utf-8");
+                            return;
+                        }
+                    }
+
+                    e.Response = Text("not found", 404, "Not Found", "text/plain");
                     return;
                 }
 
@@ -151,6 +189,64 @@ namespace Hv86.VmHost
             }
 
             e.Response = BytesResponse(bytes, 200, "OK", contentType);
+        }
+
+        /// <summary>
+        /// Общая папка для web-движка: страница присылает {op, path, ...},
+        /// мы выполняем операцию над настоящей папкой и отвечаем JSON.
+        /// Синхронный запрос - требование handle9p в v86.
+        /// </summary>
+        private void HandleShare(CoreWebView2WebResourceRequestedEventArgs e)
+        {
+            try
+            {
+                if (Share == null)
+                {
+                    e.Response = Text("{\"error\":\"EACCES\"}", 403, "Forbidden", "application/json");
+                    return;
+                }
+
+                string body = "";
+
+                try
+                {
+                    if (e.Request.Content != null)
+                    {
+                        using (StreamReader reader = new StreamReader(e.Request.Content, Encoding.UTF8))
+                            body = reader.ReadToEnd();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("SHARE", "тело запроса: " + ex.Message);
+                }
+
+                Dictionary<string, object> request = Json.ParseObjectSafe(body);
+
+                if (request == null)
+                {
+                    e.Response = Text("{\"error\":\"EINVAL\"}", 200, "OK", "application/json");
+                    return;
+                }
+
+                Dictionary<string, object> response = Share.Execute(request);
+
+                e.Response = BytesResponse(Encoding.UTF8.GetBytes(Json.Stringify(response)),
+                    200, "OK", "application/json");
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("SHARE", "операция", ex);
+
+                try
+                {
+                    e.Response = Text("{\"error\":\"EIO\"}", 200, "OK", "application/json");
+                }
+                catch
+                {
+                    // соединение уже закрыто
+                }
+            }
         }
 
         private CoreWebView2WebResourceResponse BytesResponse(byte[] bytes, int status, string reason, string contentType)

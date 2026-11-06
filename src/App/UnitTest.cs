@@ -6,6 +6,7 @@ using System.Net;
 using System.Text;
 using Hv86.Core;
 using Hv86.Vm;
+using Hv86.VmHost;
 
 namespace Hv86.App
 {
@@ -34,6 +35,7 @@ namespace Hv86.App
                 TestPaths(dir);
                 TestAnsi();
                 TestEgress();
+                TestShare(dir);
             }
             catch (Exception ex)
             {
@@ -221,6 +223,54 @@ namespace Hv86.App
 
             Check(EgressPolicy.NormalizeMode("SAFE") == EgressPolicy.ModeSafe, "egress: mode normalization");
             Check(new EgressPolicy().IsAllowed("anywhere", Addrs("127.0.0.1"), 1), "egress: default mode is unrestricted");
+        }
+
+        private static void TestShare(string dir)
+        {
+            string share = Path.Combine(dir, "share");
+            Directory.CreateDirectory(share);
+            File.WriteAllText(Path.Combine(share, "a.txt"), "hello", new UTF8Encoding(false));
+
+            ShareFileServer server = new ShareFileServer(share, false);
+
+            Dictionary<string, object> stat = server.Execute(Json.Obj("op", "stat", "path", "a.txt"));
+            Check(!Json.GetBool(stat, "dir", true) && Json.GetLong(stat, "size", 0) == 5, "share: stat file");
+
+            List<object> entries = Json.GetList(server.Execute(Json.Obj("op", "readdir", "path", "")), "entries");
+            Check(entries != null && entries.Count >= 1, "share: readdir");
+
+            Dictionary<string, object> read = server.Execute(
+                Json.Obj("op", "read", "path", "a.txt", "offset", 0L, "count", 16));
+
+            string data = Encoding.UTF8.GetString(Convert.FromBase64String(Json.GetString(read, "data", "")));
+            Check(data == "hello", "share: read");
+
+            Dictionary<string, object> write = server.Execute(Json.Obj(
+                "op", "write", "path", "a.txt", "offset", 0L,
+                "data", Convert.ToBase64String(Encoding.UTF8.GetBytes("hi"))));
+
+            Check(Json.GetInt(write, "written", 0) == 2 &&
+                  File.ReadAllText(Path.Combine(share, "a.txt"), Encoding.UTF8) == "hillo",
+                "share: write at offset");
+
+            Check(server.Execute(Json.Obj("op", "mkdir", "path", "sub")).ContainsKey("ok"), "share: mkdir");
+            Check(server.Execute(Json.Obj("op", "rename", "from", "a.txt", "to", "b.txt")).ContainsKey("ok"),
+                "share: rename");
+            Check(File.Exists(Path.Combine(share, "b.txt")), "share: rename landed");
+
+            Check(Json.GetString(server.Execute(Json.Obj("op", "stat", "path", "../outside")), "error", "") == "EACCES",
+                "share: .. is refused");
+            Check(Json.GetString(server.Execute(Json.Obj("op", "stat", "path", "..\\outside")), "error", "") == "EACCES",
+                "share: backslash traversal is refused");
+            Check(Json.GetString(server.Execute(Json.Obj("op", "stat", "path", "C:\\Windows")), "error", "") == "EACCES",
+                "share: absolute path is refused");
+
+            ShareFileServer readOnly = new ShareFileServer(share, true);
+
+            Check(Json.GetString(readOnly.Execute(Json.Obj(
+                      "op", "write", "path", "b.txt", "offset", 0L,
+                      "data", Convert.ToBase64String(Encoding.UTF8.GetBytes("x")))), "error", "") == "EROFS",
+                "share: read-only returns EROFS");
         }
 
         private static void Check(bool ok, string what)

@@ -18,6 +18,7 @@ import fs from "node:fs";
 import net from "node:net";
 import { V86 } from "v86";
 import { createShareHandler } from "./fs9p.mjs";
+import { createNodeFs } from "./fs-node.mjs";
 
 const STREAM_PREFIX = "\\\\.\\pipe\\hv86-vm-";
 const SCREEN_POLL_MS = 120;
@@ -108,7 +109,8 @@ function buildOptions(cfg) {
             log("share: каталог не найден, пропускаю: " + cfg.share.path);
         } else {
             options.filesystem = {
-                handle9p: createShareHandler(cfg.share.path, {
+                handle9p: createShareHandler({
+                    fs: createNodeFs(cfg.share.path),
                     readonly: !!cfg.share.readonly,
                     log: (text) => log("9p: " + text)
                 })

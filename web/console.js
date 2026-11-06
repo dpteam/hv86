@@ -103,6 +103,8 @@
 
         if (c.initialState) options.initial_state = { url: c.initialState };
 
+        if (c._filesystem) options.filesystem = c._filesystem;
+
         return options;
     }
 
@@ -111,6 +113,29 @@
 
         byId("vm-name").textContent = c.name || c.id || "VM";
         byId("vm-id").textContent = c.id || "";
+
+        // общая папка web-движка: протокол 9p в JS, файлы - в C# через
+        // синхронные POST (handle9p у v86 синхронный)
+        if (c.share) {
+            try {
+                const modules = await Promise.all([
+                    import("/engine/fs9p.mjs"),
+                    import("/engine/fs-xhr.mjs")
+                ]);
+
+                c._filesystem = {
+                    handle9p: modules[0].createShareHandler({
+                        fs: modules[1].createXhrFs(c.share.endpoint),
+                        readonly: !!c.share.readonly,
+                        log: function (text) { post({ action: "log", text: "9p: " + text }); }
+                    })
+                };
+
+                post({ action: "log", text: "9p: общая папка подключена" });
+            } catch (e) {
+                post({ action: "log", text: "9p: не загрузился — " + (e && e.message || e) });
+            }
+        }
 
         if (emu) {
             try { await emu.destroy(); } catch (e) { /* уже мёртв */ }
@@ -414,6 +439,25 @@
 
             case "tcpClose":
                 tcpClose(message);
+                break;
+
+            case "xhrTest":
+                try {
+                    var xhr = new XMLHttpRequest();
+                    xhr.open("POST", "/share", false);
+                    xhr.setRequestHeader("Content-Type", "application/json");
+                    xhr.send(JSON.stringify({ op: "stat", path: "hello.txt" }));
+
+                    post({
+                        action: "xhrResult",
+                        ok: xhr.status === 200,
+                        status: xhr.status,
+                        body: String(xhr.responseText || "").slice(0, 160),
+                        filesystem: !!(config && config._filesystem)
+                    });
+                } catch (e) {
+                    post({ action: "xhrResult", ok: false, status: 0, body: String(e && e.message || e) });
+                }
                 break;
 
             case "attach":

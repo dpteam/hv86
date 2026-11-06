@@ -68,15 +68,16 @@
   правила в настройках ВМ, применяются на лету, есть таймаут установки 30 с.
 - ✅ WISP-сервер (`VmHost/WispRelay.cs`): произвольный TCP из гостя наружу в режиме
   `net.mode=relay`; свой websocket-сервер на TcpListener, без http.sys и зависимостей.
-- ✅ Общая папка (9p): `engine/fs9p.mjs` — сервер 9P2000.L поверх настоящего каталога
-  хоста (только headless), с защитой от выхода за папку и режимом read-only.
-  Протокол проверяется своим клиентом (`node engine/test-9p.mjs`) из `--htest`.
+- ✅ Общая папка (9p): `engine/fs9p.mjs` — протокол 9P2000.L, адаптеры `fs-node` (Node)
+  и `fs-xhr` + `VmHost/ShareFileServer` (web, синхронный XHR). Проверки выхода за
+  папку и режим read-only. Тесты: свой клиент (`node engine/test-9p.mjs`), `--unit`,
+  `--itest` (транспорт и загрузка модулей в страницу).
 - ✅ CLI `hv86 --cli ...`: list/status/start/stop/pause/resume/reset/console/delete,
   снапшоты и откат, create/export/import, presets/log/diagnostics, флаг `--json`.
 - ✅ Правила исходящего трафика для релея: `any` / `safe` (без LAN и localhost) /
   `allowlist`; решение по разрешённым адресам, отказ гостю — `CLOSE(0x48)`.
 - ⬜ Правила для `fetch`-backend (в браузере своей точки решения нет).
-- ⬜ Буфер обмена, звук (SB16), 9p для web-движка.
+- ⬜ Буфер обмена, звук (SB16).
 - ⬜ Реплика на вторую машину (`replica-remote`), REST-опционально.
 - ⬜ Обновление v86 (пиннинг версий, миграция state), отчёт о совместимости гостей.
 

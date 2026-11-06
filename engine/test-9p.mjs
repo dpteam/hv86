@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createShareHandler } from "./fs9p.mjs";
+import { createNodeFs } from "./fs-node.mjs";
 
 let failures = 0;
 
@@ -98,7 +99,7 @@ try {
         // без прав на симлинки тест просто пропускает эту часть
     }
 
-    const handle = createShareHandler(root, { log: () => {} });
+    const handle = createShareHandler({ fs: createNodeFs(root), log: () => {} });
 
     // ---- version
     let reply = call(handle, message(100, 0xFFFF, writer().u32(8192).str("9P2000.L")));
@@ -191,20 +192,29 @@ try {
     check(typeOf(reply) === 77, "Runlinkat");
     check(!fs.existsSync(path.join(root, "renamed")), "unlink removed directory");
 
-    // ---- выход за пределы шары
-    reply = call(handle, message(110, 14, writer().u32(1).u32(9).u16(1).str("..")));
-    check(typeOf(reply) === 7, "walk .. is refused");
+    // ---- выход за пределы шары: ".." поднимает наверх, но не выше корня
+    reply = call(handle, message(110, 14, writer().u32(1).u32(9).u16(2).str("sub").str("..")));
+    check(typeOf(reply) === 111, "walk sub/.. works");
 
     reader = new Reader(reply.buffer, 7);
-    check(reader.u32() === 13, "walk .. -> EACCES");
+    check(reader.u16() === 2, "walk sub/.. returns two qids");
+
+    reply = call(handle, message(110, 15, writer().u32(1).u32(10).u16(3).str("sub").str("..").str("..")));
+    check(typeOf(reply) === 111, "walk clamps at the share root");
+
+    reader = new Reader(reply.buffer, 7);
+    check(reader.u16() === 3, "clamped walk still reports qids");
+
+    reply = call(handle, message(110, 16, writer().u32(1).u32(11).u16(1).str("../outside")));
+    check(typeOf(reply) === 7, "component with separator is refused");
 
     if (outsideLinkCreated) {
-        reply = call(handle, message(110, 15, writer().u32(1).u32(10).u16(2).str("escape").str("secret.txt")));
+        reply = call(handle, message(110, 17, writer().u32(1).u32(12).u16(2).str("escape").str("secret.txt")));
         check(typeOf(reply) === 7, "symlink escape is refused");
     }
 
     // ---- только чтение
-    const readOnly = createShareHandler(root, { readonly: true, log: () => {} });
+    const readOnly = createShareHandler({ fs: createNodeFs(root), readonly: true, log: () => {} });
 
     call(readOnly, message(100, 0xFFFF, writer().u32(8192).str("9P2000.L")));
     call(readOnly, message(104, 1, writer().u32(1).u32(0xFFFFFFFF).str("hv86").str("").u32(0)));

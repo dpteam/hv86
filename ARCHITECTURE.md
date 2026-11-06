@@ -149,7 +149,7 @@ WebSocket на 127.0.0.1 со случайным портом, пакеты `CON
 | экран | canvas v86 целиком | VGA-текст 80×25 с ANSI-цветами |
 | мышь/звук | да | нет |
 | окно | своё окно v86 | окно интерфейса рисует текст |
-| общая папка (9p) | нет | **да** (`engine/fs9p.mjs`) |
+| общая папка (9p) | **да** (sync XHR + `ShareFileServer`) | **да** (`engine/fs9p.mjs` + `fs-node`) |
 
 - Headless не умеет пиксели в принципе: в Node нет DOM/canvas, а шим браузера
   внутри эмулятора — хрупкий костыль (разбор в `docs/research/headless.md`).
@@ -161,16 +161,23 @@ WebSocket на 127.0.0.1 со случайным портом, пакеты `CON
 
 ### Общая папка (9p)
 
-Гость видит выбранную папку хоста через virtio-9p: `engine/fs9p.mjs` —
-сервер **9P2000.L** поверх `handle9p`. Почему только headless: колбэк
-синхронный, а синхронного доступа к файлам в браузере нет; в Node есть `fs.*Sync`.
+Гость видит выбранную папку хоста через virtio-9p. Протокол **9P2000.L** один
+на оба движка (`engine/fs9p.mjs`), а файловые операции — разные адаптеры:
+
+- **headless (Node):** `engine/fs-node.mjs` поверх `node:fs` (синхронно);
+- **web (WebView2):** `engine/fs-xhr.mjs` — синхронные POST к `/share`, которые
+  выполняет `VmHost/ShareFileServer.cs` уже над настоящей папкой.
+
+Почему так: `handle9p` у v86 синхронный, а в браузере нет ни `fs`, ни `node:path`.
+Поэтому в JS остаётся только протокол (относительные пути через `/`), а «какой
+настоящий путь и можно ли туда ходить» решает адаптер — на стороне, которая
+владеет файловой системой.
 
 - Путь хранится в `vm.json`: `share {path, tag: "host9p", readonly}`.
 - В госте: `mount -t 9p -o trans=virtio,version=9p2000.L host9p /mnt/share`.
-- Безопасность: пути только внутри папки, `..`/разделители отвергаются,
-  симлинки проверяются по `realpath` с настоящим корнем, read-only отдаёт `EROFS`.
-- Подробности и список неподдержанного (symlink/mknod/locks) —
-  `docs/research/9p.md`.
+- Безопасность: компоненты путей проверяются на `..`/разделители, настоящий путь
+  (после симлинков) обязан остаться внутри папки, read-only отдаёт `EROFS`.
+- Подробности и список неподдержанного — `docs/research/9p.md`.
 
 ## 3. Снапшоты (checkpoint-дерево)
 
@@ -262,10 +269,11 @@ src/Core/            Paths, Json, AtomicFile, Log, Settings, SingleInstance, Pip
                      Brand, Resources
 src/Vm/              VmDefinition, VmStore, VmManager, VmProcess, CheckpointStore,
                      PresetCatalog, V86State, V86Assets, VmArchive, ForwardRule, EgressPolicy
-src/VmHost/          VmHostForm, VmHostRunner, VmResourceServer, PortForwarder, WispRelay
+src/VmHost/          VmHostForm, VmHostRunner, VmResourceServer, PortForwarder, WispRelay,
+                     ShareFileServer
 web/                 manager.html, manager.js, console.html, console.js, theme.css, i18n/
-engine/              vmhost.mjs (Node), fs9p.mjs (9p-сервер), test-9p.mjs,
-                     package.json (v86 pinned), node_modules (npm install)
+engine/              vmhost.mjs (Node), fs9p.mjs (протокол 9p), fs-node.mjs, fs-xhr.mjs,
+                     test-9p.mjs, package.json (v86 pinned), node_modules (npm install)
 assets/              hv86.ico, presets.json, v86/<version>/{libv86.js,v86.wasm,seabios.bin,vgabios.bin}
 docs/research/       v86-api.md, webview2-service.md, ft-design.md, wisp.md, headless.md
 tools/               fetch-webview2.ps1, fetch-v86.ps1, fetch-engine.ps1, make-icon.ps1,

@@ -50,6 +50,7 @@ namespace Hv86.VmHost
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         private Dictionary<string, object> _bootConfig;
+        private TaskCompletionSource<Dictionary<string, object>> _xhrProbe;
 
         private sealed class PendingSave
         {
@@ -132,6 +133,20 @@ namespace Hv86.VmHost
 
                 _form.ResourceServer.MediaPath = ResolveMedia;
                 _form.ResourceServer.StatePath = ResolveState;
+
+                // общая папка: файлы трогаем только в C#, страница просит операции
+                if (!string.IsNullOrEmpty(_vm.SharePath))
+                {
+                    try
+                    {
+                        _form.ResourceServer.Share = new ShareFileServer(_vm.SharePath, _vm.ShareReadOnly);
+                        Log.Info("NET", "share: " + _vm.SharePath + (_vm.ShareReadOnly ? " (ro)" : " (rw)"));
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("NET", "share недоступна: " + ex.Message);
+                    }
+                }
 
                 _server = new PipeServer(PipeNames.VmHost(_vm.Id), DispatchAsync);
                 _server.Start();
@@ -255,6 +270,10 @@ namespace Hv86.VmHost
                     _forwarder?.GuestClosed(Json.GetString(message, "session", ""),
                         Json.GetString(message, "error", ""));
                     break;
+
+                case "xhrResult":
+                    _xhrProbe?.TrySetResult(message);
+                    break;
             }
         }
 
@@ -347,6 +366,13 @@ namespace Hv86.VmHost
 
             if (_stateFiles.ContainsKey("restore.bin"))
                 config["initialState"] = VmResourceServer.Origin + "/state/restore.bin";
+
+            if (_form != null && _form.ResourceServer != null && _form.ResourceServer.Share != null)
+            {
+                config["share"] = Json.Obj(
+                    "endpoint", "/share",
+                    "readonly", _vm.ShareReadOnly);
+            }
 
             return config;
         }
@@ -716,6 +742,25 @@ namespace Hv86.VmHost
                 case "vm.shutdown":
                     _ = Task.Run(() => ShutdownAsync("service"));
                     return Json.Obj("ok", true);
+
+                // диагностика: умеет ли страница синхронный XHR к /share
+                // (на этом держится общая папка в web-движке)
+                case "vm.debug.xhr":
+                {
+                    TaskCompletionSource<Dictionary<string, object>> probe =
+                        new TaskCompletionSource<Dictionary<string, object>>(
+                            TaskCreationOptions.RunContinuationsAsynchronously);
+
+                    _xhrProbe = probe;
+                    _form.Post(Json.Obj("action", "xhrTest"));
+
+                    Task finished = await Task.WhenAny(probe.Task, Task.Delay(15000)).ConfigureAwait(false);
+                    _xhrProbe = null;
+
+                    if (finished != probe.Task) throw new Hv86Exception("страница не ответила на xhr-пробу");
+
+                    return await probe.Task.ConfigureAwait(false);
+                }
             }
 
             throw new Hv86Exception("неизвестный метод: " + method);
