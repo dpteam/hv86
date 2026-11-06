@@ -110,6 +110,33 @@ namespace Hv86.App
 
                 Ok("vm.snapshot", Math.Round(Json.GetLong(snapshot, "size", 0) / 1024.0 / 1024.0, 1) + " MB");
 
+                // окно консоли headless: проверяем, что оно открывается, подключается
+                // к движку и переживает отрисовку (глазами это не проверить)
+                try
+                {
+                    using (HeadlessConsoleWindow window = new HeadlessConsoleWindow(id, "htest"))
+                    {
+                        window.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
+                        window.Location = new System.Drawing.Point(-32000, -32000);
+                        window.Show();
+
+                        DateTime until = DateTime.UtcNow.AddSeconds(5);
+                        while (DateTime.UtcNow < until)
+                        {
+                            System.Windows.Forms.Application.DoEvents();
+                            Thread.Sleep(50);
+                        }
+
+                        window.Close();
+                    }
+
+                    Ok("console window", "opened, painted and closed");
+                }
+                catch (Exception ex)
+                {
+                    Fail("console window: " + ex.GetType().Name + ": " + ex.Message);
+                }
+
                 object snapshots = CallRaw(client, "vm.snapshots", Json.Obj("id", id));
                 List<object> list = snapshots as List<object>;
 
