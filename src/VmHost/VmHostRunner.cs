@@ -34,6 +34,7 @@ namespace Hv86.VmHost
         private VmHostForm _form;
         private PipeServer _server;
         private PortForwarder _forwarder;
+        private WispRelay _relay;
 
         private string _state = "starting";
         private string _error = "";
@@ -137,7 +138,24 @@ namespace Hv86.VmHost
 
                 _forwarder = new PortForwarder(message => _form.Post(message));
                 _forwarder.Report += text => Broadcast("vm.forward", Json.Obj("id", _vmId, "text", text));
-                _forwarder.Apply(_vm.Forwards);
+
+                // проброс портов работает только на NAT-стеке fetch: в режиме
+                // relay внутрь гостя подключиться нечем
+                _forwarder.Apply(_vm.NetMode == "nat" ? _vm.Forwards : new List<ForwardRule>());
+
+                // полный доступ в сеть: wisp-релей поднимаем только если он
+                // включён, иначе остаётся fetch (HTTP + проброс портов)
+                if (_vm.NetMode == "relay")
+                {
+                    _relay = new WispRelay();
+
+                    string relayError;
+                    if (!_relay.Start(out relayError))
+                    {
+                        Log.Warn("NET", "wisp relay не поднялся, остаётся fetch: " + relayError);
+                        _relay = null;
+                    }
+                }
 
                 _bootConfig = BuildBootConfig();
 
@@ -183,6 +201,8 @@ namespace Hv86.VmHost
                         "id", _vmId,
                         "instructions", _instructions,
                         "mips", _mips,
+                        "relay_port", _relay == null ? 0 : _relay.Port,
+                        "relay_clients", _relay == null ? 0 : _relay.Handshakes,
                         "state", _state));
                     break;
 
@@ -307,7 +327,10 @@ namespace Hv86.VmHost
                 "memory", (long)_vm.MemoryMb * 1024 * 1024,
                 "vgaMemory", (long)_vm.VgaMemoryMb * 1024 * 1024,
                 "bootOrder", BootOrderValue(_vm.BootOrder),
-                "net", Json.Obj("type", string.IsNullOrEmpty(_vm.NetType) ? "virtio" : _vm.NetType, "mode", "nat"));
+                "net", Json.Obj(
+                    "type", string.IsNullOrEmpty(_vm.NetType) ? "virtio" : _vm.NetType,
+                    "mode", _vm.NetMode,
+                    "relayUrl", _relay != null ? "wisp://127.0.0.1:" + _relay.Port : "fetch"));
 
             Dictionary<string, object> hda = MediaDescriptor(_vm.HdaPath);
             if (hda != null) config["hda"] = hda;
@@ -595,7 +618,9 @@ namespace Hv86.VmHost
                         "state", _state,
                         "error", _error,
                         "instructions", _instructions,
-                        "mips", _mips);
+                        "mips", _mips,
+                        "relay_port", _relay == null ? 0 : _relay.Port,
+                        "relay_clients", _relay == null ? 0 : _relay.Handshakes);
 
                 case "vm.pause":
                     _form.Post(Json.Obj("action", "freeze"));
@@ -640,7 +665,7 @@ namespace Hv86.VmHost
                     int dropped;
                     List<ForwardRule> rules = ForwardRule.ParseList(Json.GetList(parameters, "rules"), out dropped);
 
-                    _forwarder?.Apply(rules);
+                    _forwarder?.Apply(_vm.NetMode == "nat" ? rules : new List<ForwardRule>());
                     _vm.Forwards = rules;
 
                     return Json.Obj("count", rules.Count, "dropped", dropped);
@@ -692,6 +717,9 @@ namespace Hv86.VmHost
 
             try { _forwarder?.Dispose(); } catch { }
             _forwarder = null;
+
+            try { _relay?.Dispose(); } catch { }
+            _relay = null;
 
             try { _server?.Dispose(); } catch { }
             _server = null;

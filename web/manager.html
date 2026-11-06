@@ -289,6 +289,15 @@
         <div class="hint" data-i18n="set.memoryHint">Memory applies after the VM is stopped and clears old checkpoints.</div>
       </div>
 
+      <div class="field">
+        <label data-i18n="set.net">Network</label>
+        <select id="setNetMode">
+          <option value="nat" data-i18n="set.netNat">NAT — HTTP out + port forwarding</option>
+          <option value="relay" data-i18n="set.netRelay">Full TCP via relay — no inbound forwarding</option>
+        </select>
+        <div class="hint" data-i18n="set.netHint">Applies after restart. NAT: guest reaches HTTP(S) and host ports can be forwarded into it. Relay: any TCP outbound.</div>
+      </div>
+
       <div class="group-title" data-i18n="set.ft">Fault tolerance</div>
 
       <div class="field">

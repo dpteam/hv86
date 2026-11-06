@@ -56,13 +56,14 @@
 - ⬜ Политика `engine: web|headless`: `always` (в службе) / `interactive` (в сессии).
 - **Accept:** ВМ стартует до логина, после логоута не падает, снапшоты совместимы с WebEngine.
 
-## M6 · Сеть, периферия, масштаб — частично
+## M6 · Сеть, периферия, масштаб — в работе
 - ✅ Проброс TCP host → guest (`127.0.0.1:2222 → guest:22`) через `tcp_probe/connect`;
   правила в настройках ВМ, применяются на лету, есть таймаут установки 30 с.
+- ✅ WISP-сервер (`VmHost/WispRelay.cs`): произвольный TCP из гостя наружу в режиме
+  `net.mode=relay`; свой websocket-сервер на TcpListener, без http.sys и зависимостей.
 - ✅ CLI `hv86 --cli ...`: list/status/start/stop/pause/resume/reset/console/delete,
   снапшоты и откат, create/export/import, presets/log/diagnostics, флаг `--json`.
-- ⬜ Полноценный relay (`hv86-netd`): произвольный TCP/UDP наружу (fetch-backend
-  умеет только HTTP), per-VM сети, UFW-подобные правила.
+- ⬜ Per-VM сети и правила исходящего трафика (что гостю можно наружу).
 - ⬜ 9p-шаренная папка (drag&drop файлов), буфер обмена, звук (SB16).
 - ⬜ Реплика на вторую машину (`replica-remote`), REST-опционально.
 - ⬜ Обновление v86 (пиннинг версий, миграция state), отчёт о совместимости гостей.

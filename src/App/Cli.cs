@@ -404,6 +404,9 @@ namespace Hv86.App
 
             if (options.ContainsKey("autostart")) parameters["autostart"] = true;
 
+            string netMode = Option(options, "net", "");
+            if (netMode == "relay") parameters["net_mode"] = "relay";
+
             if (string.IsNullOrEmpty(preset) && string.IsNullOrEmpty(iso))
                 throw new Hv86Exception("нужен --preset <id> или --iso <путь>");
 
@@ -599,7 +602,7 @@ namespace Hv86.App
             Console.WriteLine("  hv86 --cli snapshot <vm> [имя]       снять снапшот");
             Console.WriteLine("  hv86 --cli snapshots <vm>            список снапшотов");
             Console.WriteLine("  hv86 --cli revert <vm> <снапшот>     откатить");
-            Console.WriteLine("  hv86 --cli create --name <имя> --preset <id> [--memory МБ] [--disk МБ]");
+            Console.WriteLine("  hv86 --cli create --name <имя> --preset <id> [--memory МБ] [--disk МБ] [--net relay]");
             Console.WriteLine("  hv86 --cli create --name <имя> --iso <файл>");
             Console.WriteLine("  hv86 --cli export <vm> [файл.hv86x]");
             Console.WriteLine("  hv86 --cli import <файл.hv86x>");

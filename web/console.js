@@ -94,7 +94,7 @@
             fastboot: true
         };
 
-        if (c.net) options.net_device = { type: c.net.type || "virtio", relay_url: "fetch" };
+        if (c.net) options.net_device = { type: c.net.type || "virtio", relay_url: c.net.relayUrl || "fetch" };
         if (c.bootOrder) options.boot_order = c.bootOrder;
 
         if (c.hda) options.hda = { url: "/media/hda", size: c.hda.size };

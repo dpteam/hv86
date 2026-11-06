@@ -36,6 +36,7 @@ namespace Hv86.Vm
         public string FdaFile = null;
 
         public string NetType = "virtio";
+        public string NetMode = "nat";
         public string BootOrder = "auto";
 
         /// <summary>Проброс TCP: host-порт → порт в госте.</summary>
@@ -86,7 +87,7 @@ namespace Hv86.Vm
 
             Dictionary<string, object> netBlock = Json.Obj(
                     "type", NetType,
-                    "mode", "nat");
+                    "mode", NetMode);
 
                 if (Forwards != null && Forwards.Count > 0)
                 {
@@ -140,6 +141,7 @@ namespace Hv86.Vm
             if (net != null)
             {
                 vm.NetType = Json.GetString(net, "type", "virtio");
+                vm.NetMode = Json.GetString(net, "mode", "nat");
 
                 List<object> forwards = Json.GetList(net, "forwards");
                 int dropped;
@@ -185,6 +187,7 @@ namespace Hv86.Vm
                 "cdrom", DescribeMedia(CdromFile),
                 "floppy", DescribeMedia(FdaFile),
                 "autostart", Autostart,
+                "net_mode", NetMode,
                 "ft_mode", FtMode,
                 "restart", Restart,
                 "interval_ms", FtIntervalMs,

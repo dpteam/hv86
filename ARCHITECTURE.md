@@ -76,28 +76,43 @@ v86 не имеет API «сохрани диск»: записи гостя ж�
 `vmhost` шаг 2–3 не выполняется — образ остаётся нетронутым, а ВМ поднимается из
 чекпоинта, в котором эти блоки уже есть. Оба пути дают согласованное состояние.
 
-#### Сеть: NAT и проброс портов
+#### Сеть: два режима
 
-Исходящая сеть — встроенный `fetch`-backend v86: DHCP выдаёт гостю `192.168.86.100`,
-наружу гость ходит через `fetch()` страницы. Ограничение самого backend'а: наружу
-проксируется только HTTP(S), произвольный TCP «в интернет» — нет.
+v86 даёт два разных сетевых backend'а, и они несовместимы по возможностям:
 
-Входящие соединения решены через публичный API v86
-(`network_adapter.tcp_probe/connect`, PR #1233):
+| режим (`net.mode`) | backend | что может | чего не может |
+|---|---|---|---|
+| `nat` (по умолчанию) | `fetch` | HTTP(S) наружу; DHCP/DNS/ICMP внутри; **проброс портов внутрь** (`tcp_probe/connect`) | произвольный TCP/UDP наружу (apt, git, ssh) |
+| `relay` | `wisp` | **любой TCP** наружу через наш WISP-сервер | входящий проброс (нет NAT-стека в JS) |
+
+Режим хранится в `vm.json` (`net.mode`) и меняется в настройках ВМ; применяется
+после перезапуска, потому что backend выбирается при старте эмулятора.
+
+**NAT + проброс внутрь.** `fetch`-backend проксирует только HTTP(S). Зато у него
+есть JS-API `network_adapter.tcp_probe/connect` (PR #1233), которым можно открыть
+TCP-соединение к порту гостя. Отсюда проброс:
 
 ```
 клиент → 127.0.0.1:2222 (TcpListener в vmhost)
         → postMessage {tcpConnect, port:22}
         → v86.connect(22) → TCP-машина fetch-backend → гость
-        ↔ {tcpData} в обе стороны, base64
+        ↔ {tcpData} в обе стороны, base64, куски по 32 КБ
 ```
 
-- Правила живут в `vm.json`: `net.forwards[{host_port, guest_port, bind}]`,
-  правятся в настройках ВМ и применяются на лету (без перезапуска).
-- Слушаем `127.0.0.1` по умолчанию; `0.0.0.0` — только осознанно.
-- Ввод/вывод идёт кусками по 32 КБ; на установку соединения отведено 30 с,
-  иначе сокет закрывается (гость без DHCP не должен держать полусессию).
-- Всё видно в журнале: `vm.forward` («listening», «connection», «no answer»).
+Правила: `net.forwards[{host_port, guest_port, bind}]`, слушаем `127.0.0.1`,
+на установку соединения 30 с, всё видно в журнале как `vm.forward`.
+
+**Relay наружу.** `src/VmHost/WispRelay.cs` — WISP-сервер (protocol.md v1.2):
+WebSocket на 127.0.0.1 со случайным портом, пакеты `CONNECT/DATA/CONTINUE/CLOSE`,
+соединение к `host:port` открывает уже наш процесс, поэтому гостю доступен любой TCP.
+
+- Свой WebSocket-сервер вместо `HttpListener`: тот идёт через http.sys и требует
+  URL ACL, а vmhost живёт под обычным пользователем. Хендшейк и кадры разбираются
+  вручную (~150 строк), зависимостей ноль.
+- Страница консоли отдаётся по `http://hv86.local`, а не `https://`: Chromium
+  запрещает `ws://` из https-документа (mixed content), а релей локальный.
+- Ограничения релея: 128 потоков на соединение, буфер 4 МБ на поток,
+  таймаут установки 12 с, ответы об ошибках по кодам протокола (0x41–0x49).
 
 ## 3. Снапшоты (checkpoint-дерево)
 
@@ -187,7 +202,7 @@ src/Core/            Paths, Json, AtomicFile, Log, Settings, SingleInstance, Pip
                      PipeClient, ProcessJob, SessionLauncher, SelfHost, Brand, Resources
 src/Vm/              VmDefinition, VmStore, VmManager, VmProcess, CheckpointStore,
                      PresetCatalog, V86State, VmArchive, ForwardRule
-src/VmHost/          VmHostForm, VmHostRunner, VmResourceServer, PortForwarder
+src/VmHost/          VmHostForm, VmHostRunner, VmResourceServer, PortForwarder, WispRelay
 web/                 manager.html, manager.js, console.html, console.js, theme.css, i18n/
 assets/              hv86.ico, presets.json, v86/<version>/{libv86.js,v86.wasm,seabios.bin,vgabios.bin}
 docs/research/       v86-api.md, webview2-service.md, ft-design.md

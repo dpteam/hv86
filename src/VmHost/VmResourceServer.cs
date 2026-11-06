@@ -9,7 +9,12 @@ using Microsoft.Web.WebView2.Core;
 namespace Hv86.VmHost
 {
     /// <summary>
-    /// Отдаёт страницу консоли и всё, что нужно v86, по https://hv86.local/.
+    /// Отдаёт страницу консоли и всё, что нужно v86, по http://hv86.local/.
+    ///
+    /// Схема именно http, а не https: страница открывает WebSocket к
+    /// локальному wisp-релею (ws://127.0.0.1:port), а Chromium запрещает
+    /// небезопасный ws:// из https-документа (mixed content). Никаких других
+    /// причин для https у нас нет - это локальная страница из вшитых ресурсов.
     ///
     /// Почему свой обработчик, а не SetVirtualHostNameToFolderMapping:
     /// образы дисков v86 читает кусками через Range-запросы, а ещё ему нужен
@@ -28,7 +33,7 @@ namespace Hv86.VmHost
     /// </summary>
     public sealed class VmResourceServer : IDisposable
     {
-        public const string Origin = "https://hv86.local";
+        public const string Origin = "http://hv86.local";
 
         private readonly CoreWebView2 _core;
         private readonly List<FileStream> _streams = new List<FileStream>();

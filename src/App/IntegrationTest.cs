@@ -157,6 +157,55 @@ namespace Hv86.App
                 Dictionary<string, object> reverted = WaitState(client, id, "running", 90000);
                 Ok("vm.revert", "state=" + Json.GetString(reverted, "state", ""));
 
+                // ---- сеть: relay (WISP) и произвольный TCP из гостя
+                // поднимаем локальный echo-сервер и просим relay соединиться с ним
+                using (System.Net.Sockets.TcpListener echo = new System.Net.Sockets.TcpListener(
+                           System.Net.IPAddress.Loopback, 0))
+                {
+                    echo.Start();
+
+                    int echoPort = ((System.Net.IPEndPoint)echo.LocalEndpoint).Port;
+
+                    System.Threading.Tasks.Task echoTask = System.Threading.Tasks.Task.Run(async delegate
+                    {
+                        try
+                        {
+                            using (System.Net.Sockets.TcpClient peer = await echo.AcceptTcpClientAsync())
+                            using (System.Net.Sockets.NetworkStream stream = peer.GetStream())
+                            {
+                                byte[] buffer = new byte[256];
+                                int read = await stream.ReadAsync(buffer, 0, buffer.Length);
+                                if (read > 0) await stream.WriteAsync(buffer, 0, read);
+                            }
+                        }
+                        catch
+                        {
+                            // тест сам решит, что делать
+                        }
+                    });
+
+                    Call(client, "vm.update", Json.Obj("id", id, "net_mode", "relay"), 30000);
+                    Call(client, "vm.stop", Json.Obj("id", id), 120000);
+                    Call(client, "vm.start", Json.Obj("id", id));
+                    WaitState(client, id, "running", 90000);
+
+                    int relayPort = WaitRelayPort(client, id, 60000);
+                    Ok("wisp relay listening", "127.0.0.1:" + relayPort);
+
+                    // самое важное: страница v86 сама подключилась к релею
+                    // (если бы ws:// блокировался из-за схемы страницы, здесь было бы 0)
+                    WaitRelayClients(client, id, 1, 45000);
+                    Ok("v86 joined the relay", "websocket from the console page is alive");
+
+                    string relayDetail;
+                    bool relayOk = WispTestClient.Echo(relayPort, echoPort, "hv86-relay", out relayDetail);
+
+                    if (relayOk) Ok("wisp relay TCP", relayDetail);
+                    else Fail("wisp relay: " + relayDetail);
+
+                    try { echo.Stop(); } catch { }
+                }
+
                 // ---- настройки: имя и параметры FT
                 Dictionary<string, object> updated = Call(client, "vm.update", Json.Obj(
                     "id", id,
@@ -290,6 +339,42 @@ namespace Hv86.App
 
                 System.Threading.Thread.Sleep(300);
             }
+        }
+
+        /// <summary>Ждёт, пока vmhost сообщит порт wisp-релея.</summary>
+        private static int WaitRelayPort(PipeClient client, string id, int timeoutMs)
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+
+            while (watch.ElapsedMilliseconds < timeoutMs)
+            {
+                Dictionary<string, object> view = Call(client, "vm.get", Json.Obj("id", id), 15000);
+                int port = Json.GetInt(view, "relay_port", 0);
+
+                if (port > 0) return port;
+                if (Json.GetString(view, "state", "") == "failed") break;
+
+                System.Threading.Thread.Sleep(400);
+            }
+
+            throw new Hv86Exception("relay port did not appear");
+        }
+
+        /// <summary>Ждёт, пока к релею подключится сама страница v86.</summary>
+        private static void WaitRelayClients(PipeClient client, string id, int minimum, int timeoutMs)
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+
+            while (watch.ElapsedMilliseconds < timeoutMs)
+            {
+                Dictionary<string, object> view = Call(client, "vm.get", Json.Obj("id", id), 15000);
+
+                if (Json.GetInt(view, "relay_clients", 0) >= minimum) return;
+
+                System.Threading.Thread.Sleep(400);
+            }
+
+            throw new Hv86Exception("v86 never connected to the wisp relay (websocket blocked?)");
         }
 
         /// <summary>Проверка проброса: подключаемся как обычный клиент и ждём закрытия.</summary>

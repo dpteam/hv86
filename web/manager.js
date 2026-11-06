@@ -365,6 +365,7 @@
         byId("setName").value = vm.name || "";
         byId("setMemory").value = String(vm.memory_mb || 128);
         byId("setAutostart").checked = !!vm.autostart;
+        byId("setNetMode").value = vm.net_mode === "relay" ? "relay" : "nat";
 
         byId("setFtMode").value = vm.ft_mode === "checkpoint" ? "checkpoint" : "off";
         byId("setInterval").value = Math.max(2, Math.round((vm.interval_ms || 15000) / 1000));
@@ -388,6 +389,19 @@
         var list = byId("fwdList");
         list.innerHTML = "";
 
+        var relayMode = byId("setNetMode").value === "relay";
+        var addButton = document.querySelector('[data-act="fwd.add"]');
+
+        if (addButton) addButton.disabled = relayMode;
+
+        if (relayMode) {
+            var note = document.createElement("div");
+            note.className = "hint";
+            note.textContent = T("set.netRelayNote");
+            list.appendChild(note);
+            return;
+        }
+
         if (!state.fwdDraft.length) {
             var empty = document.createElement("div");
             empty.className = "dim";
@@ -409,6 +423,11 @@
     }
 
     function addForward() {
+        if (byId("setNetMode").value === "relay") {
+            toast(T("set.netRelayNote"), "bad");
+            return;
+        }
+
         var host = Number(byId("fwdHost").value);
         var guest = Number(byId("fwdGuest").value);
 
@@ -446,6 +465,7 @@
             restart: byId("setRestart").value,
             max_attempts: Math.max(0, Number(byId("setAttempts").value) || 0),
             restore_on_crash: byId("setRestore").checked,
+            net_mode: byId("setNetMode").value,
             forwards: state.fwdDraft
         });
 
@@ -646,6 +666,7 @@
     });
 
     byId("newPreset").addEventListener("change", applyPreset);
+    byId("setNetMode").addEventListener("change", renderForwards);
     byId("lang").value = lang;
 
     byId("lang").addEventListener("change", function () {

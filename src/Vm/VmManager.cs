@@ -37,6 +37,8 @@ namespace Hv86.Vm
             public DateTime LastBeatUtc = DateTime.UtcNow;
             public long Instructions;
             public int Mips;
+            public int RelayPort;
+            public int RelayClients;
             public bool RingBusy;
             public DateTime NextRingUtc = DateTime.UtcNow;
             public bool Restarting;
@@ -135,6 +137,8 @@ namespace Hv86.Vm
                     : (long)(DateTime.UtcNow - runtime.StartedUtc).TotalSeconds;
                 view["checkpoints"] = CheckpointStore.RingCount(runtime.Def);
                 view["alive"] = runtime.Proc != null && !runtime.Proc.HasExited;
+                view["relay_port"] = runtime.RelayPort;
+                view["relay_clients"] = runtime.RelayClients;
 
                 list.Add(view);
             }
@@ -150,6 +154,8 @@ namespace Hv86.Vm
             view["mips"] = runtime.Mips;
             view["checkpoints"] = CheckpointStore.RingCount(runtime.Def);
             view["alive"] = runtime.Proc != null && !runtime.Proc.HasExited;
+            view["relay_port"] = runtime.RelayPort;
+            view["relay_clients"] = runtime.RelayClients;
             return view;
         }
 
@@ -210,6 +216,7 @@ namespace Hv86.Vm
             vm.MemoryMb = memoryMb;
             vm.VgaMemoryMb = vgaMb;
             vm.Autostart = Json.GetBool(parameters, "autostart", false);
+            vm.NetMode = Json.GetString(parameters, "net_mode", "nat") == "relay" ? "relay" : "nat";
             vm.BootOrder = preset == null ? "auto" : Json.GetString(preset, "boot", "auto");
             vm.HdaFile = null;
             vm.CdromFile = null;
@@ -655,6 +662,9 @@ namespace Hv86.Vm
 
                 def.Autostart = Json.GetBool(parameters, "autostart", def.Autostart);
 
+                string netMode = Json.GetString(parameters, "net_mode", null);
+                if (netMode == "nat" || netMode == "relay") def.NetMode = netMode;
+
                 string mode = Json.GetString(parameters, "ft_mode", def.FtMode);
                 if (mode == "off" || mode == "checkpoint" || mode == "replica") def.FtMode = mode;
 
@@ -1028,6 +1038,8 @@ namespace Hv86.Vm
                     runtime.LastBeatUtc = DateTime.UtcNow;
                     runtime.Instructions = Json.GetLong(data, "instructions", runtime.Instructions);
                     runtime.Mips = Json.GetInt(data, "mips", runtime.Mips);
+                    runtime.RelayPort = Json.GetInt(data, "relay_port", runtime.RelayPort);
+                    runtime.RelayClients = Json.GetInt(data, "relay_clients", runtime.RelayClients);
                 }
             }
 
