@@ -315,6 +315,69 @@ namespace Hv86.App
                     else
                         Fail("egress policy did not block loopback: " + blockedDetail);
 
+                    // ---- та же политика для fetch-бэкенда (nat): страница
+                    // спрашивает разрешение у хоста, а не ходит куда попало
+                    using (System.Net.Sockets.TcpListener http = new System.Net.Sockets.TcpListener(
+                               System.Net.IPAddress.Loopback, 0))
+                    {
+                        http.Start();
+                        int httpPort = ((System.Net.IPEndPoint)http.LocalEndpoint).Port;
+
+                        System.Threading.Tasks.Task httpTask = System.Threading.Tasks.Task.Run(async delegate
+                        {
+                            try
+                            {
+                                using (System.Net.Sockets.TcpClient peer = await http.AcceptTcpClientAsync())
+                                using (System.Net.Sockets.NetworkStream stream = peer.GetStream())
+                                {
+                                    byte[] buffer = new byte[1024];
+                                    int read = await stream.ReadAsync(buffer, 0, buffer.Length);
+
+                                    if (read <= 0) return;
+
+                                    byte[] response = System.Text.Encoding.ASCII.GetBytes(
+                                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n" +
+                                        "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nok");
+
+                                    await stream.WriteAsync(response, 0, response.Length);
+                                }
+                            }
+                            catch
+                            {
+                                // тест сам решит, что делать
+                            }
+                        });
+
+                        string probeUrl = "http://127.0.0.1:" + httpPort + "/";
+
+                        // egress_mode=safe выставлен выше: loopback должен быть закрыт
+                        Dictionary<string, object> deniedFetch = CallVm(id, "vm.debug.fetch",
+                            Json.Obj("url", probeUrl), 60000);
+
+                        string denyError = Json.GetString(deniedFetch, "error", "");
+
+                        if (!Json.GetBool(deniedFetch, "ok", true) &&
+                            denyError.IndexOf("egress", StringComparison.OrdinalIgnoreCase) >= 0)
+                            Ok("fetch egress deny", "loopback blocked: " + denyError);
+                        else
+                            Fail("fetch egress did not block loopback: " + Json.Stringify(deniedFetch));
+
+                        // и тот же адрес обязан пройти, когда политика это разрешает
+                        Call(client, "vm.update", Json.Obj("id", id, "egress_mode", "any"), 30000);
+                        System.Threading.Thread.Sleep(500);
+
+                        Dictionary<string, object> allowedFetch = CallVm(id, "vm.debug.fetch",
+                            Json.Obj("url", probeUrl), 60000);
+
+                        if (Json.GetBool(allowedFetch, "ok", false) &&
+                            Json.GetInt(allowedFetch, "status", 0) == 200)
+                            Ok("fetch egress allow", "same address allowed in 'any' mode");
+                        else
+                            Fail("fetch egress blocked in 'any' mode: " + Json.Stringify(allowedFetch));
+
+                        try { http.Stop(); } catch { }
+                    }
+
                     try { echo.Stop(); } catch { }
                 }
 
@@ -588,6 +651,20 @@ namespace Hv86.App
                 if (Json.GetString(view, "state", "") == "failed") return;
 
                 System.Threading.Thread.Sleep(300);
+            }
+        }
+
+        /// <summary>Запрос в канал самого vmhost: команды, которых нет у службы.</summary>
+        private static Dictionary<string, object> CallVm(string id, string method,
+            Dictionary<string, object> parameters, int timeoutMs = 30000)
+        {
+            using (PipeClient vm = new PipeClient(PipeNames.VmHost(id)))
+            {
+                if (!vm.ConnectAsync(5000).GetAwaiter().GetResult())
+                    throw new Hv86Exception("cannot connect to the vm pipe: " + method);
+
+                return vm.CallForResultAsync(method, parameters, timeoutMs).GetAwaiter().GetResult()
+                    as Dictionary<string, object>;
             }
         }
 

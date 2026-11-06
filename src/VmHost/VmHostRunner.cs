@@ -40,6 +40,7 @@ namespace Hv86.VmHost
         private PipeServer _server;
         private PortForwarder _forwarder;
         private WispRelay _relay;
+        private EgressGate _egress;
 
         private string _state = "starting";
         private string _error = "";
@@ -58,6 +59,7 @@ namespace Hv86.VmHost
         private TaskCompletionSource<Dictionary<string, object>> _xhrProbe;
         private TaskCompletionSource<bool> _restoreWait;
         private TaskCompletionSource<bool> _typeWait;
+        private TaskCompletionSource<Dictionary<string, object>> _fetchProbe;
         private bool _promoted;
 
         private sealed class PendingSave
@@ -144,6 +146,12 @@ namespace Hv86.VmHost
 
                 _form.ResourceServer.MediaPath = ResolveMedia;
                 _form.ResourceServer.StatePath = ResolveState;
+
+                // исходящий трафик fetch-бэкенда (net.mode=nat): страница
+                // спрашивает разрешение на каждый не-свой запрос, решаем здесь
+                _egress = new EgressGate(BuildEgressPolicy(_vm));
+                _form.ResourceServer.Egress = _egress;
+                Log.Info("NET", _egress.Policy.Describe());
 
                 // общая папка: файлы трогаем только в C#, страница просит операции
                 if (!string.IsNullOrEmpty(_vm.SharePath))
@@ -294,6 +302,10 @@ namespace Hv86.VmHost
                     _typeWait?.TrySetResult(Json.GetBool(message, "ok", true));
                     if (!Json.GetBool(message, "ok", true))
                         _error = Json.GetString(message, "error", "typing failed");
+                    break;
+
+                case "fetchResult":
+                    _fetchProbe?.TrySetResult(message);
                     break;
             }
         }
@@ -852,6 +864,7 @@ namespace Hv86.VmHost
                     policy.Allow = EgressPolicy.ParseRules(items, out dropped);
 
                     _relay?.SetPolicy(policy);
+                    _egress?.SetPolicy(policy);
 
                     return Json.Obj("mode", policy.Mode, "rules", policy.Allow.Count, "dropped", dropped);
                 }
@@ -859,6 +872,29 @@ namespace Hv86.VmHost
                 case "vm.eject":
                     await DetachAsync(Json.GetString(parameters, "kind", "cdrom")).ConfigureAwait(false);
                     return Json.Obj("ok", true);
+
+                // диагностика: страница делает настоящий fetch через обёртку
+                // egress и возвращает, что вышло (нужно тестам и логам)
+                case "vm.debug.fetch":
+                {
+                    string url = Json.GetString(parameters, "url", "");
+
+                    if (string.IsNullOrEmpty(url)) throw new Hv86Exception("не указан url");
+
+                    TaskCompletionSource<Dictionary<string, object>> probe =
+                        new TaskCompletionSource<Dictionary<string, object>>(
+                            TaskCreationOptions.RunContinuationsAsynchronously);
+
+                    _fetchProbe = probe;
+                    _form.Post(Json.Obj("action", "fetchProbe", "url", url));
+
+                    Task finished = await Task.WhenAny(probe.Task, Task.Delay(30000)).ConfigureAwait(false);
+                    _fetchProbe = null;
+
+                    if (finished != probe.Task) throw new Hv86Exception("страница не ответила на fetch-пробу");
+
+                    return await probe.Task.ConfigureAwait(false);
+                }
 
                 case "vm.restoreState":
                 {

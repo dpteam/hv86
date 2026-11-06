@@ -16,12 +16,17 @@
  *   {action:"stateError", token, message}
  *   {action:"screenshot", data}                   data:image/png;base64,…
  *   {action:"error", message}
+ *   {action:"paste"}                              Ctrl+V: дай текст из буфера хоста
+ *   {action:"typed", ok, chars|error}             текст набран (ответ на type)
+ *   {action:"xhrResult"} / {action:"restoreDone"} / {action:"fetchResult"}
  *
  * Хост -> страница:
  *   {action:"boot", config}                       создать эмулятор
  *   {action:"ack", token, seq}                    подтверждение куска state
  *   {action:"attach", kind, url, size}            вставить образ
  *   {action:"detach", kind}                       извлечь образ
+ *   {action:"type", text}                         набрать текст в гостя
+ *   {action:"fetchProbe", url}                    диагностика egress
  *   {action:"toast", text, kind}
  */
 (function () {
@@ -42,6 +47,69 @@
     var tcpSessions = new Map();
 
     // ------------------------------------------------------------- утилиты
+
+    // ------------------------------------------------------- egress (fetch)
+
+    // В режиме nat сеть гостя идёт через браузерный fetch, поэтому без этой
+    // обёртки гость достаёт localhost хоста и его LAN. Решение принимает C#
+    // (`VmHost/EgressGate`): страница только спрашивает и слушается.
+    var realFetch = window.fetch ? window.fetch.bind(window) : null;
+
+    function gateDecision(url) {
+        try {
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/egress", false);
+            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.send(JSON.stringify({ url: String(url) }));
+
+            return JSON.parse(xhr.responseText || "{}") || {};
+        } catch (e) {
+            // хост не ответил - закрываемся, а не пропускаем
+            return { allow: false, reason: "gate unavailable" };
+        }
+    }
+
+    function needsGate(url) {
+        try {
+            var parsed = new URL(String(url), location.href);
+
+            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+
+            return parsed.origin !== location.origin;    // свои ресурсы не трогаем
+        } catch (e) {
+            return false;
+        }
+    }
+
+    if (realFetch) {
+        window.fetch = function (input, init) {
+            var url = typeof input === "string" ? input : (input && input.url) || "";
+
+            if (!needsGate(url)) return realFetch(input, init);
+
+            var decision = gateDecision(url);
+
+            if (decision.allow === false) {
+                post({ action: "log", text: "egress: запрещено " + url + " (" + (decision.reason || "denied") + ")" });
+                return Promise.reject(new TypeError("hv86: egress blocked: " + (decision.reason || "denied")));
+            }
+
+            return realFetch(input, init).then(function (response) {
+                // редирект мог увести на внутренний адрес: тело уже не отдаём,
+                // но сам факт фиксируем в логе
+                if (response && response.url && response.url !== url && needsGate(response.url)) {
+                    var final = gateDecision(response.url);
+
+                    if (final.allow === false) {
+                        post({ action: "log", text: "egress: запрещён редирект на " + response.url });
+                        throw new TypeError("hv86: egress blocked after redirect");
+                    }
+                }
+
+                return response;
+            });
+        };
+    }
 
     function setState(next, detail) {
         state = next;
@@ -494,6 +562,23 @@
 
             case "type":
                 typeText(message);
+                break;
+
+            // диагностика egress: страница делает настоящий fetch через
+            // обёртку и сообщает, что из этого вышло
+            case "fetchProbe":
+                fetch(message.url)
+                    .then(function (response) {
+                        post({
+                            action: "fetchResult",
+                            ok: true,
+                            status: response.status,
+                            url: response.url
+                        });
+                    })
+                    .catch(function (e) {
+                        post({ action: "fetchResult", ok: false, error: String(e && e.message || e) });
+                    });
                 break;
 
             case "tcpConnect":

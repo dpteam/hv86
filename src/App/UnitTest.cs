@@ -35,6 +35,7 @@ namespace Hv86.App
                 TestPaths(dir);
                 TestAnsi();
                 TestEgress();
+                TestEgressGate();
                 TestShare(dir);
             }
             catch (Exception ex)
@@ -223,6 +224,46 @@ namespace Hv86.App
 
             Check(EgressPolicy.NormalizeMode("SAFE") == EgressPolicy.ModeSafe, "egress: mode normalization");
             Check(new EgressPolicy().IsAllowed("anywhere", Addrs("127.0.0.1"), 1), "egress: default mode is unrestricted");
+        }
+
+        /// <summary>
+        /// EgressGate: то, что решает за fetch-бэкенд. Проверяем на IP-литералах,
+        /// чтобы не зависеть от DNS (он здесь только для имён).
+        /// </summary>
+        private static void TestEgressGate()
+        {
+            EgressGate gate = new EgressGate(new EgressPolicy());
+
+            Check(Json.GetBool(gate.Decide("http://192.0.2.10/x"), "allow", false), "gate: any allows http");
+            Check(Json.GetBool(gate.Decide("data:text/plain,x"), "allow", false), "gate: non-http passes");
+            Check(!Json.GetBool(gate.Decide("не url"), "allow", true), "gate: bad url is denied");
+
+            EgressPolicy safe = new EgressPolicy { Mode = EgressPolicy.ModeSafe };
+            gate.SetPolicy(safe);
+
+            Dictionary<string, object> loopback = gate.Decide("http://127.0.0.1:8080/");
+
+            Check(!Json.GetBool(loopback, "allow", true), "gate: safe denies loopback");
+            Check(Json.GetString(loopback, "reason", "").IndexOf("loopback", StringComparison.Ordinal) >= 0,
+                "gate: deny reason is explicit");
+            Check(!Json.GetBool(gate.Decide("http://[::1]/"), "allow", true), "gate: safe denies ipv6 loopback");
+            Check(Json.GetBool(gate.Decide("https://192.0.2.10/"), "allow", false), "gate: safe allows public ip");
+
+            // кэш: то же решение отдаётся без повторного разбора, а смена
+            // политики его сбрасывает
+            Check(!Json.GetBool(gate.Decide("http://10.1.2.3/"), "allow", true), "gate: safe denies 10/8");
+
+            EgressPolicy list = new EgressPolicy { Mode = EgressPolicy.ModeAllowList };
+            int dropped;
+            list.Allow = EgressPolicy.ParseRules(new List<string> { "192.0.2.77:443" }, out dropped);
+            gate.SetPolicy(list);
+
+            Check(Json.GetBool(gate.Decide("https://192.0.2.77/"), "allow", false),
+                "gate: allowlist matches ip and port");
+            Check(!Json.GetBool(gate.Decide("https://192.0.2.77:80/"), "allow", true),
+                "gate: allowlist respects port");
+            Check(!Json.GetBool(gate.Decide("https://192.0.2.78/"), "allow", true),
+                "gate: allowlist denies other ip");
         }
 
         private static void TestShare(string dir)

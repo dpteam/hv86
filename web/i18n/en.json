@@ -109,11 +109,11 @@
   "set.shareHint": "Headless engine only. In the guest: mount -t 9p -o trans=virtio,version=9p2000.L host9p /mnt/share",
 
   "set.egress": "Outbound traffic",
-  "set.egressMode": "Policy (relay mode)",
+  "set.egressMode": "Policy (relay and nat)",
   "set.egressAny": "any — no restrictions",
   "set.egressSafe": "safe — internet only (no LAN / loopback)",
   "set.egressList": "allowlist — only the list below",
-  "set.egressHint": "For net.mode=relay. One target per line: host, IP or CIDR, optionally :port. Matching uses resolved addresses, so a DNS name pointing at 127.0.0.1 does not slip through.",
+  "set.egressHint": "Applies to both relay and nat (the guest then goes through v86's fetch backend). One target per line: host, IP or CIDR, optionally :port. Matching uses resolved addresses, so a DNS name pointing at 127.0.0.1 does not slip through.",
 
   "clone.title": "Clone virtual machine",
   "clone.label": "Name for the new virtual machine",

@@ -109,11 +109,11 @@
   "set.shareHint": "Только headless-движок. В госте: mount -t 9p -o trans=virtio,version=9p2000.L host9p /mnt/share",
 
   "set.egress": "Исходящий трафик",
-  "set.egressMode": "Политика (режим relay)",
+  "set.egressMode": "Политика (relay и nat)",
   "set.egressAny": "any — без ограничений",
   "set.egressSafe": "safe — только интернет (без LAN и localhost)",
   "set.egressList": "allowlist — только список ниже",
-  "set.egressHint": "Для net.mode=relay. Одна цель на строку: имя, IP или CIDR, при желании :порт. Проверяются разрешённые адреса, поэтому DNS-имя, указывающее на 127.0.0.1, не пролезет.",
+  "set.egressHint": "Работает и для relay, и для nat (гость ходит через fetch-бэкенд v86). Одна цель на строку: имя, IP или CIDR, при желании :порт. Проверяются разрешённые адреса, поэтому DNS-имя, указывающее на 127.0.0.1, не пролезет.",
 
   "clone.title": "Клонирование ВМ",
   "clone.label": "Имя новой виртуальной машины",

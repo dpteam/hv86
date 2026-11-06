@@ -47,6 +47,9 @@ namespace Hv86.VmHost
         /// <summary>Общая папка web-движка (9p через синхронные POST).</summary>
         public ShareFileServer Share;
 
+        /// <summary>Проверка исходящего трафика для fetch-бэкенда (net.mode=nat).</summary>
+        public EgressGate Egress;
+
         /// <summary>Готовая страница консоли (с вшитыми css/js).</summary>
         public string ConsoleHtml = "";
 
@@ -91,6 +94,15 @@ namespace Hv86.VmHost
                 if (path == "/share/ping")
                 {
                     e.Response = BytesResponse(Encoding.UTF8.GetBytes("{\"ok\":true}"), 200, "OK", "application/json");
+                    return;
+                }
+
+                // егress для fetch-бэкенда: страница спрашивает разрешение на
+                // каждый не-свой запрос. Синхронно - потому что спрашивает из
+                // обёртки над fetch, до самого запроса
+                if (path == "/egress" && string.Equals(e.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    HandleEgress(e);
                     return;
                 }
 
@@ -192,6 +204,51 @@ namespace Hv86.VmHost
         }
 
         /// <summary>
+        /// Разрешение на исходящий запрос из страницы (fetch-бэкенд v86).
+        /// Тело: {url}. Ответ: {allow, reason, host, port, addresses}.
+        /// </summary>
+        private void HandleEgress(CoreWebView2WebResourceRequestedEventArgs e)
+        {
+            try
+            {
+                string body = ReadBody(e);
+                Dictionary<string, object> request = Json.ParseObjectSafe(body);
+
+                string url = request == null ? "" : Json.GetString(request, "url", "");
+
+                Dictionary<string, object> decision = Egress == null
+                    ? Json.Obj("allow", true, "reason", "no gate")
+                    : Egress.Decide(url);
+
+                e.Response = BytesResponse(Encoding.UTF8.GetBytes(Json.Stringify(decision)),
+                    200, "OK", "application/json");
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("NET", "egress-проверка", ex);
+
+                try { e.Response = Text("{\"allow\":false,\"reason\":\"gate error\"}", 200, "OK", "application/json"); }
+                catch { }
+            }
+        }
+
+        private static string ReadBody(CoreWebView2WebResourceRequestedEventArgs e)
+        {
+            try
+            {
+                if (e.Request.Content == null) return "";
+
+                using (StreamReader reader = new StreamReader(e.Request.Content, Encoding.UTF8))
+                    return reader.ReadToEnd();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("RES", "тело запроса: " + ex.Message);
+                return "";
+            }
+        }
+
+        /// <summary>
         /// Общая папка для web-движка: страница присылает {op, path, ...},
         /// мы выполняем операцию над настоящей папкой и отвечаем JSON.
         /// Синхронный запрос - требование handle9p в v86.
@@ -206,20 +263,7 @@ namespace Hv86.VmHost
                     return;
                 }
 
-                string body = "";
-
-                try
-                {
-                    if (e.Request.Content != null)
-                    {
-                        using (StreamReader reader = new StreamReader(e.Request.Content, Encoding.UTF8))
-                            body = reader.ReadToEnd();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn("SHARE", "тело запроса: " + ex.Message);
-                }
+                string body = ReadBody(e);
 
                 Dictionary<string, object> request = Json.ParseObjectSafe(body);
 
