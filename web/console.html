@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hv86 · console</title>
+<style>/*{{THEME}}*/</style>
+<style>
+/* --- console: только то, что относится к экрану ВМ --- */
+html, body.console { height: 100%; margin: 0; }
+body.console {
+  display: flex; flex-direction: column; overflow: hidden;
+  background: #05070b; color: #dbe6f7;
+  font: 12px/1.4 "Segoe UI", system-ui, sans-serif;
+}
+.con-top {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 10px; background: #0d1219; border-bottom: 1px solid #1b2735;
+  user-select: none; flex: 0 0 auto;
+}
+.con-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #f0b429; box-shadow: 0 0 6px #f0b42988; }
+.dot.running { background: #35d07f; box-shadow: 0 0 8px #35d07f99; }
+.dot.paused  { background: #f0b429; }
+.dot.failed  { background: #ff5c5c; box-shadow: 0 0 8px #ff5c5c99; }
+.vm-name { font-weight: 600; font-size: 13px; }
+.vm-id { color: #6f8199; font-family: Consolas, monospace; font-size: 11px; }
+.con-buttons { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.cbtn {
+  width: 30px; height: 26px; border-radius: 6px; border: 1px solid #223043;
+  background: #121a24; color: #cfe0f5; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.cbtn svg { display: block; }
+.cbtn:hover:not(:disabled) { background: #1a2634; border-color: #33506e; }
+.cbtn:disabled { opacity: .35; cursor: default; }
+.cbtn.danger:hover:not(:disabled) { border-color: #7a2c2c; color: #ff9d9d; }
+.sep { width: 1px; height: 18px; background: #223043; margin: 0 4px; }
+.con-right { min-width: 220px; text-align: right; color: #7f93ab; font-family: Consolas, monospace; font-size: 11px; }
+.screen-wrap { flex: 1 1 auto; overflow: auto; display: flex; align-items: center; justify-content: center; background: #05070b; }
+.screen { background: #000; line-height: 0; }
+.screen canvas { image-rendering: pixelated; }
+.con-bottom {
+  display: flex; justify-content: space-between; padding: 3px 10px;
+  background: #0d1219; border-top: 1px solid #1b2735;
+  color: #6f8199; font-family: Consolas, monospace; font-size: 11px; flex: 0 0 auto;
+}
+</style>
+</head>
+<body class="console">
+
+<div class="con-top">
+  <div class="con-left">
+    <span id="dot" class="dot"></span>
+    <span id="vm-name" class="vm-name">…</span>
+    <span id="vm-id" class="vm-id"></span>
+  </div>
+  <div class="con-buttons">
+    <button class="cbtn" data-cmd="run" title="Start" aria-label="Start">
+      <svg viewBox="0 0 16 16" width="13" height="13"><path d="M5 3.2 L12.2 8 L5 12.8 Z" fill="currentColor"/></svg>
+    </button>
+    <button class="cbtn" data-cmd="pause" title="Pause" aria-label="Pause">
+      <svg viewBox="0 0 16 16" width="13" height="13"><rect x="4.6" y="3.4" width="2.4" height="9.2" fill="currentColor"/><rect x="9" y="3.4" width="2.4" height="9.2" fill="currentColor"/></svg>
+    </button>
+    <button class="cbtn" data-cmd="reset" title="Reset" aria-label="Reset">
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <path d="M13 8a5 5 0 1 1-1.7-3.8"/><path d="M13.2 2.6v3.2H10"/>
+      </svg>
+    </button>
+    <span class="sep"></span>
+    <button class="cbtn" data-cmd="iso" title="Attach ISO / image" aria-label="Attach image">
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4">
+        <circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none"/>
+      </svg>
+    </button>
+    <button class="cbtn" data-cmd="eject" title="Eject CD" aria-label="Eject">
+      <svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 9.6 L8 4.4 L12 9.6 Z" fill="currentColor"/><rect x="3.6" y="11" width="8.8" height="1.6" fill="currentColor"/></svg>
+    </button>
+    <button class="cbtn" data-cmd="snapshot" title="Take snapshot" aria-label="Snapshot">
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4">
+        <path d="M2.6 5.6h2.1l1-1.6h4.6l1 1.6h2.1v7H2.6z"/><circle cx="8" cy="8.9" r="2.3"/>
+      </svg>
+    </button>
+    <button class="cbtn" data-cmd="screenshot" title="Save screenshot" aria-label="Screenshot">
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4">
+        <rect x="2.4" y="3.6" width="11.2" height="8.8" rx="1"/><path d="M2.6 10.1l3.2-2.6 2.4 2 1.9-1.4 3.3 2.9"/>
+      </svg>
+    </button>
+    <span class="sep"></span>
+    <button class="cbtn danger" data-cmd="hide" title="Hide window (VM keeps running)" aria-label="Hide window">
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <path d="M4 4l8 8M12 4l-8 8"/>
+      </svg>
+    </button>
+  </div>
+  <div class="con-right"><span id="stat">loading…</span></div>
+</div>
+
+<div class="screen-wrap">
+  <div id="screen_container" class="screen">
+    <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
+    <canvas style="display: none"></canvas>
+  </div>
+</div>
+
+<div class="con-bottom">
+  <span id="foot">hv86 · v86 {{VERSION}}</span>
+  <span id="foot-right"></span>
+</div>
+
+<script src="/v86/libv86.js"></script>
+<script>//{{JS}}</script>
+</body>
+</html>

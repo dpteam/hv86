@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "note": "Free and freely redistributable boot images. SHA-256 is required: an image that does not match is never used.",
+  "presets": [
+    {
+      "id": "freedos",
+      "name": "FreeDOS 7.22",
+      "kind": "fda",
+      "url": "https://i.copy.sh/freedos722.img",
+      "size": 737280,
+      "sha256": "8ecc7604d4c17c16e136d219a92e64747196d9ae044690e90be9ca0468b1ff12",
+      "memory_mb": 32,
+      "vga_memory_mb": 4,
+      "disk_mb": 0,
+      "boot": "FLOPPY_CD_HARDDISK",
+      "description": "Bootable 720K FreeDOS floppy. Boots in about a second, ideal for a first VM and for tests."
+    },
+    {
+      "id": "kolibrios",
+      "name": "KolibriOS",
+      "kind": "fda",
+      "url": "https://i.copy.sh/kolibri.img",
+      "size": 1474560,
+      "sha256": "f3ec74d5b70e5b7a8b0d053a1ada738a75159366b50af8a427845f87e0a91be5",
+      "memory_mb": 64,
+      "vga_memory_mb": 8,
+      "disk_mb": 0,
+      "boot": "FLOPPY_CD_HARDDISK",
+      "description": "KolibriOS on a 1.44M floppy: graphical, fast, written in assembly."
+    },
+    {
+      "id": "oberon",
+      "name": "Oberon",
+      "kind": "hda",
+      "url": "https://i.copy.sh/oberon.img",
+      "size": 25165824,
+      "sha256": "ebd5825d013c1c342c8f48b49d5a33f3ef477f1777c362bc0e5d91b75ffd1196",
+      "memory_mb": 64,
+      "vga_memory_mb": 8,
+      "disk_mb": 0,
+      "boot": "HARDDISK_CD_FLOPPY",
+      "description": "Native Oberon system on a 24M hard disk image."
+    },
+    {
+      "id": "tinycore",
+      "name": "TinyCore Linux 11",
+      "kind": "cdrom",
+      "url": "https://i.copy.sh/TinyCore-11.0.iso",
+      "size": 19922944,
+      "sha256": "778fc3788d9df3de72970827968b2b195aca827401db6f6f9cbdb737d4300bda",
+      "memory_mb": 128,
+      "vga_memory_mb": 8,
+      "disk_mb": 256,
+      "boot": "CD_HARDDISK_FLOPPY",
+      "description": "TinyCore Linux live CD with a 256M system disk attached: the usual way to try a real Linux guest."
+    },
+    {
+      "id": "linux",
+      "name": "Linux (v86 demo ISO)",
+      "kind": "cdrom",
+      "url": "https://i.copy.sh/linux.iso",
+      "size": 6547456,
+      "sha256": "ff21a908573cdf2cf0cd00fe30eab8646b2f64874afbb34ff6de5a915eaebcdf",
+      "memory_mb": 128,
+      "vga_memory_mb": 8,
+      "disk_mb": 256,
+      "boot": "CD_HARDDISK_FLOPPY",
+      "description": "Small Linux ISO used by the v86 project for its own tests."
+    }
+  ]
+}

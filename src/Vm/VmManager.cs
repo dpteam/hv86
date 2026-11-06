@@ -1,0 +1,1102 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Threading.Tasks;
+using Hv86.Core;
+
+namespace Hv86.Vm
+{
+    /// <summary>
+    /// Реестр ВМ и все операции над ними. Живёт в службе (и однажды - в
+    /// автономном режиме без службы). Наружу торчит только через pipe-RPC,
+    /// поэтому все методы возвращают словари, а не типы.
+    ///
+    /// Отказоустойчивость собрана здесь же:
+    ///   * Tick() - сторож: heartbeat, зависания, рестарт по политике;
+    ///   * кольцо чекпоинтов по таймеру (ft.interval_ms);
+    ///   * при рестарте после падения ВМ поднимается со свежего чекпоинта.
+    /// </summary>
+    public sealed class VmManager : IDisposable
+    {
+        private readonly object _gate = new object();
+        private readonly Dictionary<string, VmRuntime> _vms =
+            new Dictionary<string, VmRuntime>(StringComparer.Ordinal);
+
+        private readonly DateTime _startedUtc = DateTime.UtcNow;
+        private bool _disposed;
+
+        /// <summary>Событие для UI: имя события + данные.</summary>
+        public event Action<string, object> Event;
+
+        private sealed class VmRuntime
+        {
+            public VmDefinition Def;
+            public VmProcess Proc;
+            public DateTime StartedUtc = DateTime.UtcNow;
+            public DateTime LastBeatUtc = DateTime.UtcNow;
+            public long Instructions;
+            public int Mips;
+            public bool RingBusy;
+            public DateTime NextRingUtc = DateTime.UtcNow;
+            public bool Restarting;
+            public int ConsecutiveFailures;
+            public string LastRestore;
+        }
+
+        public VmManager()
+        {
+            LoadAll();
+        }
+
+        // ------------------------------------------------------------- загрузка
+
+        private void LoadAll()
+        {
+            foreach (VmDefinition def in VmStore.LoadAll())
+            {
+                // после перезапуска службы ни одна ВМ не работает: процессы
+                // vmhost были убиты вместе с job object'ом
+                if (def.State != "stopped" && def.State != "failed")
+                {
+                    Log.Warn("VM", "ВМ " + def.Id + " была в состоянии " + def.State + ", считаю остановленной");
+                    def.State = "stopped";
+                    try { VmStore.Save(def); } catch { }
+                }
+
+                lock (_gate)
+                {
+                    _vms[def.Id] = new VmRuntime
+                    {
+                        Def = def,
+                        NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, def.FtIntervalMs))
+                    };
+                }
+            }
+
+            Log.Info("VM", "загружено ВМ: " + _vms.Count);
+        }
+
+        public void StartAutostart()
+        {
+            foreach (VmRuntime runtime in Snapshot())
+            {
+                if (!runtime.Def.Autostart) continue;
+
+                string id = runtime.Def.Id;
+                Log.Info("VM", "автозапуск " + id);
+
+                Task.Run(async () =>
+                {
+                    try { await StartAsync(id, false, null).ConfigureAwait(false); }
+                    catch (Exception ex) { Log.Exception("VM", "автозапуск " + id, ex); }
+                });
+            }
+        }
+
+        // --------------------------------------------------------------- запросы
+
+        public Dictionary<string, object> HostStatus()
+        {
+            int running = 0;
+            int total = 0;
+
+            foreach (VmRuntime runtime in Snapshot())
+            {
+                total++;
+                if (runtime.Def.State == "running" || runtime.Def.State == "paused") running++;
+            }
+
+            return Json.Obj(
+                "product", AppInfo.ProductName,
+                "version", AppInfo.Version,
+                "v86", AppInfo.V86Version,
+                "uptime_sec", (long)(DateTime.UtcNow - _startedUtc).TotalSeconds,
+                "vms_total", total,
+                "vms_running", running,
+                "user", Elevation.CurrentUser,
+                "session", System.Diagnostics.Process.GetCurrentProcess().SessionId,
+                "active_session", SessionLauncher.ActiveConsoleSessionId,
+                "data_dir", Paths.Root);
+        }
+
+        public List<object> ListView()
+        {
+            List<object> list = new List<object>();
+
+            foreach (VmRuntime runtime in Snapshot())
+            {
+                Dictionary<string, object> view = runtime.Def.ToView();
+
+                view["instructions"] = runtime.Instructions;
+                view["mips"] = runtime.Mips;
+                view["uptime_sec"] = runtime.StartedUtc == default(DateTime)
+                    ? 0
+                    : (long)(DateTime.UtcNow - runtime.StartedUtc).TotalSeconds;
+                view["checkpoints"] = CheckpointStore.RingCount(runtime.Def);
+                view["alive"] = runtime.Proc != null && !runtime.Proc.HasExited;
+
+                list.Add(view);
+            }
+
+            return list;
+        }
+
+        public Dictionary<string, object> GetView(string id)
+        {
+            VmRuntime runtime = Get(id);
+            Dictionary<string, object> view = runtime.Def.ToView();
+            view["instructions"] = runtime.Instructions;
+            view["mips"] = runtime.Mips;
+            view["checkpoints"] = CheckpointStore.RingCount(runtime.Def);
+            view["alive"] = runtime.Proc != null && !runtime.Proc.HasExited;
+            return view;
+        }
+
+        public List<object> Presets()
+        {
+            List<object> list = new List<object>();
+
+            foreach (Dictionary<string, object> preset in PresetCatalog.All())
+            {
+                list.Add(Json.Obj(
+                    "id", Json.GetString(preset, "id", ""),
+                    "name", Json.GetString(preset, "name", ""),
+                    "description", Json.GetString(preset, "description", ""),
+                    "kind", Json.GetString(preset, "kind", ""),
+                    "memory_mb", Json.GetInt(preset, "memory_mb", 128),
+                    "vga_memory_mb", Json.GetInt(preset, "vga_memory_mb", 8),
+                    "disk_mb", Json.GetInt(preset, "disk_mb", 0),
+                    "boot", Json.GetString(preset, "boot", "auto"),
+                    "size", Json.GetLong(preset, "size", 0)));
+            }
+
+            return list;
+        }
+
+        // --------------------------------------------------------------- создание
+
+        public async Task<object> CreateAsync(Dictionary<string, object> parameters)
+        {
+            string name = (Json.GetString(parameters, "name", "") ?? "").Trim();
+            string presetId = Json.GetString(parameters, "preset", "");
+            string isoPath = Json.GetString(parameters, "iso_path", "");
+
+            Dictionary<string, object> preset = PresetCatalog.Get(presetId);
+            string presetFile = null;
+
+            if (preset != null)
+            {
+                Dictionary<string, object> captured = preset;
+                presetFile = await Task.Run(() => PresetCatalog.EnsureLocalFile(captured)).ConfigureAwait(false);
+            }
+
+            int memoryMb = Json.GetInt(parameters, "memory_mb", 0);
+            if (memoryMb <= 0) memoryMb = preset == null ? 128 : Json.GetInt(preset, "memory_mb", 128);
+            memoryMb = RoundPow2(Math.Max(16, Math.Min(1024, memoryMb)));
+
+            int vgaMb = Json.GetInt(parameters, "vga_memory_mb", 0);
+            if (vgaMb <= 0) vgaMb = preset == null ? 8 : Json.GetInt(preset, "vga_memory_mb", 8);
+            vgaMb = Math.Max(2, Math.Min(32, vgaMb));
+
+            int diskMb = Json.GetInt(parameters, "disk_mb", -1);
+            if (diskMb < 0) diskMb = preset == null ? 128 : Json.GetInt(preset, "disk_mb", 0);
+
+            diskMb = Math.Max(0, Math.Min(2048, diskMb));
+
+            VmDefinition vm = new VmDefinition();
+            vm.Id = VmStore.NewId();
+            vm.Name = name.Length > 0 ? name : (preset == null ? "VM " + vm.Id : Json.GetString(preset, "name", "VM"));
+            vm.MemoryMb = memoryMb;
+            vm.VgaMemoryMb = vgaMb;
+            vm.Autostart = Json.GetBool(parameters, "autostart", false);
+            vm.BootOrder = preset == null ? "auto" : Json.GetString(preset, "boot", "auto");
+            vm.HdaFile = null;
+            vm.CdromFile = null;
+            vm.FdaFile = null;
+            vm.State = "stopped";
+
+            Paths.EnsureVmDirectories(vm.Id);
+
+            string kind = preset == null ? "" : Json.GetString(preset, "kind", "");
+
+            try
+            {
+                if (presetFile != null)
+                {
+                    string ext = Path.GetExtension(presetFile);
+                    if (string.IsNullOrEmpty(ext)) ext = ".img";
+
+                    if (kind == "fda")
+                    {
+                        string target = Path.Combine(Paths.VmMediaDir(vm.Id), "floppy" + ext);
+                        File.Copy(presetFile, target, true);
+                        vm.FdaFile = Paths.Relative(vm.Id, target);
+                    }
+                    else if (kind == "hda")
+                    {
+                        string target = Path.Combine(Paths.VmDisksDir(vm.Id), "system" + ext);
+                        File.Copy(presetFile, target, true);
+                        vm.HdaFile = Paths.Relative(vm.Id, target);
+                    }
+                    else
+                    {
+                        string target = Path.Combine(Paths.VmMediaDir(vm.Id), "boot" + ext);
+                        File.Copy(presetFile, target, true);
+                        vm.CdromFile = Paths.Relative(vm.Id, target);
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(isoPath))
+                {
+                    if (!File.Exists(isoPath)) throw new Hv86Exception("ISO не найден: " + isoPath);
+
+                    string target = Path.Combine(Paths.VmMediaDir(vm.Id), "install.iso");
+                    File.Copy(isoPath, target, true);
+                    vm.CdromFile = Paths.Relative(vm.Id, target);
+
+                    if (string.IsNullOrEmpty(vm.BootOrder) || vm.BootOrder == "auto")
+                        vm.BootOrder = "CD_HARDDISK_FLOPPY";
+                }
+
+                if (string.IsNullOrEmpty(vm.HdaFile) && diskMb > 0)
+                {
+                    string target = Path.Combine(Paths.VmDisksDir(vm.Id), "system.img");
+                    AtomicFile.CreateSparse(target, (long)diskMb * 1024 * 1024);
+                    vm.HdaFile = Paths.Relative(vm.Id, target);
+                }
+
+                if (string.IsNullOrEmpty(vm.HdaFile) && string.IsNullOrEmpty(vm.CdromFile) &&
+                    string.IsNullOrEmpty(vm.FdaFile))
+                {
+                    throw new Hv86Exception("у ВМ нет ни диска, ни образа для загрузки");
+                }
+
+                VmStore.Save(vm);
+
+                lock (_gate)
+                {
+                    _vms[vm.Id] = new VmRuntime
+                    {
+                        Def = vm,
+                        NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, vm.FtIntervalMs))
+                    };
+                }
+            }
+            catch
+            {
+                // не оставляем мусор от неудачного создания
+                try { AtomicFile.MoveToTrash(Paths.VmDir(vm.Id), "broken-" + vm.Id); } catch { }
+                throw;
+            }
+
+            Log.Info("VM", "создана ВМ " + vm.Id + " (" + vm.Name + "), память " + vm.MemoryMb + " МБ");
+
+            Emit("vm.created", vm.ToView());
+            return vm.ToView();
+        }
+
+        // --------------------------------------------------------------- запуск
+
+        public async Task<object> StartAsync(string id, bool showConsole, string restorePath)
+        {
+            VmRuntime runtime = Get(id);
+
+            lock (_gate)
+            {
+                if (runtime.Proc != null && !runtime.Proc.HasExited && runtime.Def.State == "running")
+                    return runtime.Def.ToView();
+            }
+
+            if (!string.IsNullOrEmpty(restorePath) && !File.Exists(restorePath))
+            {
+                Log.Warn("VM", "state-файл для восстановления не найден: " + restorePath);
+                restorePath = null;
+            }
+
+            runtime.Def.State = "starting";
+            runtime.Def.LastError = "";
+            runtime.StartedUtc = DateTime.UtcNow;
+            VmStore.Save(runtime.Def);
+            EmitState(runtime);
+
+            VmProcess process = null;
+
+            try
+            {
+                process = await VmProcess.LaunchAsync(runtime.Def, showConsole, restorePath,
+                    (name, data) => OnVmEvent(id, name, data)).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                lock (_gate)
+                {
+                    runtime.Def.State = "failed";
+                    runtime.Def.LastError = ex.Message;
+                    try { VmStore.Save(runtime.Def); } catch { }
+                }
+
+                EmitState(runtime);
+                throw;
+            }
+
+            lock (_gate)
+            {
+                runtime.Proc = process;
+                runtime.StartedUtc = DateTime.UtcNow;
+                runtime.LastBeatUtc = DateTime.UtcNow;
+                runtime.Instructions = 0;
+                runtime.Mips = 0;
+                runtime.LastRestore = restorePath;
+                runtime.NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, runtime.Def.FtIntervalMs));
+                runtime.Def.State = "running";
+                runtime.Def.LastError = "";
+                runtime.ConsecutiveFailures = 0;
+                try { VmStore.Save(runtime.Def); } catch { }
+            }
+
+            EmitState(runtime);
+
+            Emit("ft.event", Json.Obj(
+                "id", id,
+                "kind", restorePath == null ? "started" : "restored",
+                "text", restorePath == null ? "ВМ запущена" : "ВМ восстановлена из чекпоинта",
+                "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+
+            return runtime.Def.ToView();
+        }
+
+        public async Task<object> StopAsync(string id, bool keepRing)
+        {
+            VmRuntime runtime = Get(id);
+            VmProcess process;
+
+            lock (_gate)
+            {
+                process = runtime.Proc;
+                runtime.Proc = null;
+
+                if (process == null || process.HasExited)
+                {
+                    runtime.Def.State = "stopped";
+                    try { VmStore.Save(runtime.Def); } catch { }
+                }
+                else
+                {
+                    runtime.Def.State = "stopping";
+                }
+            }
+
+            EmitState(runtime);
+
+            if (process != null && !process.HasExited)
+            {
+                await process.ShutdownAsync(30000).ConfigureAwait(false);
+
+                if (!process.HasExited)
+                {
+                    Log.Warn("VM", "vmhost не завершился мягко, убиваю: " + id);
+                    process.Kill();
+                    await process.WaitExitAsync(5000).ConfigureAwait(false);
+                }
+            }
+
+            process?.Dispose();
+
+            lock (_gate)
+            {
+                runtime.Def.State = "stopped";
+                runtime.Instructions = 0;
+                runtime.Mips = 0;
+                try { VmStore.Save(runtime.Def); } catch { }
+            }
+
+            if (!keepRing)
+            {
+                CheckpointStore.ClearRing(runtime.Def);
+                lock (_gate) runtime.ConsecutiveFailures = 0;
+            }
+
+            EmitState(runtime);
+            return runtime.Def.ToView();
+        }
+
+        public async Task<object> PauseAsync(string id)
+        {
+            VmRuntime runtime = Get(id);
+            await Command(runtime, "vm.pause").ConfigureAwait(false);
+            runtime.Def.State = "paused";
+            VmStore.Save(runtime.Def);
+            EmitState(runtime);
+            return runtime.Def.ToView();
+        }
+
+        public async Task<object> ResumeAsync(string id)
+        {
+            VmRuntime runtime = Get(id);
+            await Command(runtime, "vm.resume").ConfigureAwait(false);
+            runtime.Def.State = "running";
+            VmStore.Save(runtime.Def);
+            EmitState(runtime);
+            return runtime.Def.ToView();
+        }
+
+        public async Task<object> ResetAsync(string id)
+        {
+            VmRuntime runtime = Get(id);
+            await Command(runtime, "vm.reset").ConfigureAwait(false);
+            runtime.Def.State = "running";
+            VmStore.Save(runtime.Def);
+            EmitState(runtime);
+            return runtime.Def.ToView();
+        }
+
+        public async Task<object> ConsoleAsync(string id)
+        {
+            VmRuntime runtime = Get(id);
+
+            if (runtime.Proc == null || runtime.Proc.HasExited)
+            {
+                await StartAsync(id, true, null).ConfigureAwait(false);
+                return runtime.Def.ToView();
+            }
+
+            await Command(runtime, "vm.show").ConfigureAwait(false);
+            return runtime.Def.ToView();
+        }
+
+        public async Task<object> HideAsync(string id)
+        {
+            VmRuntime runtime = Get(id);
+            if (runtime.Proc != null && !runtime.Proc.HasExited)
+                await Command(runtime, "vm.hide").ConfigureAwait(false);
+            return runtime.Def.ToView();
+        }
+
+        public async Task<object> DeleteAsync(string id)
+        {
+            VmRuntime runtime = Get(id);
+
+            try { await StopAsync(id, false).ConfigureAwait(false); }
+            catch (Exception ex) { Log.Warn("VM", "остановка перед удалением: " + ex.Message); }
+
+            lock (_gate) _vms.Remove(id);
+
+            VmStore.Delete(id, runtime.Def.Name);
+            Emit("vm.deleted", Json.Obj("id", id));
+            return Json.Obj("id", id);
+        }
+
+        // ----------------------------------------------------------- снапшоты
+
+        public async Task<object> SnapshotAsync(string id, string name)
+        {
+            VmRuntime runtime = Get(id);
+
+            if (runtime.Proc == null || runtime.Proc.HasExited)
+                throw new Hv86Exception("ВМ не запущена: снапшот можно снять только с работающей ВМ");
+
+            string temp = TempStatePath(id);
+            Dictionary<string, object> result;
+
+            try
+            {
+                object response = await runtime.Proc.Client.CallForResultAsync("vm.saveState",
+                    Json.Obj("path", temp, "mode", "snapshot"), 300000).ConfigureAwait(false);
+                result = response as Dictionary<string, object>;
+            }
+            catch (Exception ex)
+            {
+                TryDelete(temp);
+                throw new Hv86Exception("не удалось снять состояние: " + ex.Message);
+            }
+
+            long instructions = Json.GetLong(result, "instructions", runtime.Instructions);
+            long size = Json.GetLong(result, "size", 0);
+            long ms = Json.GetLong(result, "ms", 0);
+
+            Dictionary<string, object> snapshot = CheckpointStore.Create(runtime.Def, name, temp, instructions);
+
+            Emit("vm.snapshot", Json.Obj(
+                "id", id,
+                "snapshot", snapshot,
+                "size", size,
+                "ms", ms));
+
+            Emit("ft.event", Json.Obj(
+                "id", id,
+                "kind", "checkpoint",
+                "text", "Снапшот «" + Json.GetString(snapshot, "name", "") + "» (" +
+                        Math.Round(size / 1024.0 / 1024.0, 1) + " МБ, " + ms + " мс)",
+                "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+
+            return snapshot;
+        }
+
+        public List<object> Snapshots(string id)
+        {
+            Get(id);
+            List<object> list = new List<object>();
+            foreach (Dictionary<string, object> item in CheckpointStore.List(id)) list.Add(item);
+            return list;
+        }
+
+        public Task<object> DeleteSnapshotAsync(string id, string snapshotId)
+        {
+            VmRuntime runtime = Get(id);
+            CheckpointStore.Delete(runtime.Def, snapshotId);
+            return Task.FromResult<object>(Json.Obj("id", id, "snapshot", snapshotId));
+        }
+
+        public async Task<object> RevertAsync(string id, string snapshotId)
+        {
+            VmRuntime runtime = Get(id);
+            bool wasRunning = runtime.Proc != null && !runtime.Proc.HasExited;
+
+            if (wasRunning) await StopAsync(id, false).ConfigureAwait(false);
+
+            string state = CheckpointStore.PrepareRevert(runtime.Def, snapshotId);
+
+            Emit("ft.event", Json.Obj(
+                "id", id,
+                "kind", "revert",
+                "text", "Откат к снапшоту " + snapshotId,
+                "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+
+            return await StartAsync(id, false, state).ConfigureAwait(false);
+        }
+
+        // -------------------------------------------------------------- медиа
+
+        public async Task<object> MountAsync(string id, string path, string kind)
+        {
+            VmRuntime runtime = Get(id);
+
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                throw new Hv86Exception("файл не найден: " + path);
+
+            if (string.IsNullOrEmpty(kind)) kind = "cdrom";
+
+            string ext = Path.GetExtension(path);
+            if (string.IsNullOrEmpty(ext)) ext = ".iso";
+
+            string target = Path.Combine(Paths.VmMediaDir(id),
+                (kind == "fda" ? "floppy" : "install") + ext);
+
+            File.Copy(path, target, true);
+
+            lock (_gate)
+            {
+                if (kind == "fda") runtime.Def.FdaFile = Paths.Relative(id, target);
+                else runtime.Def.CdromFile = Paths.Relative(id, target);
+
+                VmStore.Save(runtime.Def);
+            }
+
+            if (runtime.Proc != null && !runtime.Proc.HasExited)
+            {
+                await runtime.Proc.Client.CallForResultAsync("vm.mount",
+                    Json.Obj("kind", kind, "path", target), 30000).ConfigureAwait(false);
+            }
+
+            Emit("vm.media", Json.Obj("id", id, "kind", kind, "file", Path.GetFileName(target)));
+            return runtime.Def.ToView();
+        }
+
+        public async Task<object> EjectAsync(string id, string kind)
+        {
+            VmRuntime runtime = Get(id);
+            if (string.IsNullOrEmpty(kind)) kind = "cdrom";
+
+            if (runtime.Proc != null && !runtime.Proc.HasExited)
+            {
+                await runtime.Proc.Client.CallForResultAsync("vm.eject",
+                    Json.Obj("kind", kind), 30000).ConfigureAwait(false);
+            }
+
+            lock (_gate)
+            {
+                if (kind == "fda") runtime.Def.FdaFile = null;
+                else runtime.Def.CdromFile = null;
+
+                VmStore.Save(runtime.Def);
+            }
+
+            Emit("vm.media", Json.Obj("id", id, "kind", kind, "file", ""));
+            return runtime.Def.ToView();
+        }
+
+        // ------------------------------------------------------------- настройки
+
+        public Task<object> UpdateAsync(string id, Dictionary<string, object> parameters)
+        {
+            VmRuntime runtime = Get(id);
+            bool running = runtime.Proc != null && !runtime.Proc.HasExited;
+
+            lock (_gate)
+            {
+                VmDefinition def = runtime.Def;
+
+                string name = Json.GetString(parameters, "name", null);
+                if (!string.IsNullOrWhiteSpace(name)) def.Name = name.Trim();
+
+                if (parameters.ContainsKey("memory_mb") && !running && def.State == "stopped")
+                {
+                    int memory = Json.GetInt(parameters, "memory_mb", def.MemoryMb);
+                    def.MemoryMb = RoundPow2(Math.Max(16, Math.Min(1024, memory)));
+
+                    // прежние снапшоты/чекпоинты сделаны при другом размере RAM
+                    // и несовместимы - честнее убрать их сразу, чем падать при откате
+                    CheckpointStore.ClearRing(def);
+                }
+
+                if (parameters.ContainsKey("vga_memory_mb") && !running)
+                    def.VgaMemoryMb = Math.Max(2, Math.Min(32, Json.GetInt(parameters, "vga_memory_mb", def.VgaMemoryMb)));
+
+                def.Autostart = Json.GetBool(parameters, "autostart", def.Autostart);
+
+                string mode = Json.GetString(parameters, "ft_mode", def.FtMode);
+                if (mode == "off" || mode == "checkpoint" || mode == "replica") def.FtMode = mode;
+
+                def.FtIntervalMs = Math.Max(2000, Math.Min(600000,
+                    Json.GetInt(parameters, "ft_interval_ms", def.FtIntervalMs)));
+
+                def.FtKeep = Math.Max(1, Math.Min(10, Json.GetInt(parameters, "ft_keep", def.FtKeep)));
+
+                string restart = Json.GetString(parameters, "restart", def.Restart);
+                if (restart == RestartPolicy.Always || restart == RestartPolicy.OnFailure || restart == RestartPolicy.Never)
+                    def.Restart = restart;
+
+                def.MaxAttempts = Math.Max(0, Math.Min(100,
+                    Json.GetInt(parameters, "max_attempts", def.MaxAttempts)));
+
+                def.RestoreOnCrash = Json.GetBool(parameters, "restore_on_crash", def.RestoreOnCrash);
+
+                if (parameters.ContainsKey("forwards"))
+                {
+                    int dropped;
+                    def.Forwards = ForwardRule.ParseList(Json.GetList(parameters, "forwards"), out dropped);
+                    if (dropped > 0) Log.Warn("VM", "проброс: отброшено правил " + dropped);
+                }
+
+                runtime.NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, def.FtIntervalMs));
+
+                try { VmStore.Save(def); } catch (Exception ex) { Log.Warn("VM", "сохранение настроек: " + ex.Message); }
+            }
+
+            // правила проброса применяются на лету: перезапускать ВМ ради этого
+            // не нужно, слушатели живут в vmhost
+            if (runtime.Proc != null && !runtime.Proc.HasExited)
+            {
+                List<object> rules = new List<object>();
+                foreach (ForwardRule rule in runtime.Def.Forwards) rules.Add(rule.ToDict());
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await runtime.Proc.Client.CallForResultAsync("vm.forwards",
+                            Json.Obj("rules", rules), 15000).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("VM", "применение проброса: " + ex.Message);
+                    }
+                });
+            }
+
+            Log.Info("VM", "настройки ВМ " + id + " обновлены");
+
+            Emit("vm.updated", runtime.Def.ToView());
+            EmitState(runtime);
+
+            return Task.FromResult<object>(runtime.Def.ToView());
+        }
+
+        public Task<object> CloneAsync(string id, string name)
+        {
+            VmRuntime runtime = Get(id);
+
+            if (runtime.Proc != null && !runtime.Proc.HasExited)
+                throw new Hv86Exception("остановите ВМ перед клонированием");
+
+            lock (_gate)
+            {
+                VmDefinition copy = VmStore.Clone(id, string.IsNullOrWhiteSpace(name)
+                    ? runtime.Def.Name + " (clone)"
+                    : name.Trim());
+
+                _vms[copy.Id] = new VmRuntime
+                {
+                    Def = copy,
+                    NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, copy.FtIntervalMs))
+                };
+
+                Log.Info("VM", "клон " + id + " -> " + copy.Id);
+                Emit("vm.created", copy.ToView());
+
+                return Task.FromResult<object>(copy.ToView());
+            }
+        }
+
+        public Task<object> ExportAsync(string id, string targetPath, bool includeSnapshots)
+        {
+            VmRuntime runtime = Get(id);
+
+            if (runtime.Proc != null && !runtime.Proc.HasExited)
+                throw new Hv86Exception("остановите ВМ перед экспортом");
+
+            Dictionary<string, object> result = VmArchive.Export(runtime.Def, targetPath, includeSnapshots);
+            Emit("vm.exported", Json.Obj("id", id, "path", Json.GetString(result, "path", "")));
+
+            return Task.FromResult<object>(result);
+        }
+
+        public Task<object> ImportAsync(string archivePath)
+        {
+            string newId;
+            VmDefinition vm = VmArchive.Import(archivePath, out newId);
+
+            lock (_gate)
+            {
+                _vms[vm.Id] = new VmRuntime
+                {
+                    Def = vm,
+                    NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, vm.FtIntervalMs))
+                };
+            }
+
+            Emit("vm.created", vm.ToView());
+            return Task.FromResult<object>(vm.ToView());
+        }
+
+        // ------------------------------------------------------- сторож (FT)
+
+        /// <summary>Вызывается таймером службы раз в 2 секунды.</summary>
+        public void Tick()
+        {
+            if (_disposed) return;
+
+            foreach (VmRuntime runtime in Snapshot())
+            {
+                try { TickOne(runtime); }
+                catch (Exception ex) { Log.Exception("FT", "сторож для " + runtime.Def.Id, ex); }
+            }
+        }
+
+        private void TickOne(VmRuntime runtime)
+        {
+            VmDefinition def = runtime.Def;
+
+            if (def.State == "stopped" || def.State == "failed" || def.State == "stopping") return;
+
+            // запуск/восстановление может занять десятки секунд (WebView2 +
+            // wasm + образ): процесс ещё не создан - это не падение
+            if (def.State == "starting" || def.State == "recovering")
+            {
+                if (runtime.Restarting) return;
+                if ((DateTime.UtcNow - runtime.StartedUtc).TotalSeconds < 120) return;
+            }
+
+            VmProcess process = runtime.Proc;
+
+            if (process == null || process.HasExited)
+            {
+                HandleCrash(runtime, "процесс ВМ завершился (код " + (process == null ? -1 : process.ExitCode) + ")");
+                return;
+            }
+
+            TimeSpan silence = DateTime.UtcNow - runtime.LastBeatUtc;
+
+            if (def.State == "running" && silence.TotalSeconds > 10)
+            {
+                Log.Warn("FT", "ВМ " + def.Id + " молчит " + (int)silence.TotalSeconds + " с");
+                process.Kill();
+                HandleCrash(runtime, "нет heartbeat " + (int)silence.TotalSeconds + " с");
+                return;
+            }
+
+            if (def.State != "running") return;
+            if (def.FtMode != "checkpoint") return;
+            if (runtime.RingBusy) return;
+            if (DateTime.UtcNow < runtime.NextRingUtc) return;
+
+            StartRing(runtime);
+        }
+
+        private void StartRing(VmRuntime runtime)
+        {
+            runtime.RingBusy = true;
+            runtime.NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, runtime.Def.FtIntervalMs));
+
+            string id = runtime.Def.Id;
+            string temp = TempStatePath(id);
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    if (runtime.Proc == null || runtime.Proc.HasExited) return;
+
+                    object response = await runtime.Proc.Client.CallForResultAsync("vm.saveState",
+                        Json.Obj("path", temp, "mode", "ring"), 120000).ConfigureAwait(false);
+
+                    Dictionary<string, object> result = response as Dictionary<string, object>;
+                    long instructions = Json.GetLong(result, "instructions", runtime.Instructions);
+                    long ms = Json.GetLong(result, "ms", 0);
+
+                    CheckpointStore.SaveRing(runtime.Def, temp, instructions);
+
+                    runtime.ConsecutiveFailures = 0;
+
+                    Emit("ft.event", Json.Obj(
+                        "id", id,
+                        "kind", "ring",
+                        "text", "Чекпоинт за " + ms + " мс",
+                        "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+                }
+                catch (Exception ex)
+                {
+                    TryDelete(temp);
+                    runtime.ConsecutiveFailures++;
+
+                    Log.Warn("FT", "чекпоинт " + id + ": " + ex.Message);
+
+                    // ВМ не отвечает на сохранение - не долбим её каждые 2 секунды
+                    runtime.NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(5000, runtime.Def.FtIntervalMs * 2));
+                }
+                finally
+                {
+                    runtime.RingBusy = false;
+                }
+            });
+        }
+
+        private void HandleCrash(VmRuntime runtime, string reason)
+        {
+            lock (_gate)
+            {
+                if (runtime.Restarting) return;
+                runtime.Restarting = true;
+            }
+
+            string id = runtime.Def.Id;
+
+            Task.Run(async () =>
+            {
+                VmDefinition def = runtime.Def;
+                VmProcess old = runtime.Proc;
+                runtime.Proc = null;
+
+                try
+                {
+                    old?.Dispose();
+
+                    lock (_gate)
+                    {
+                        def.State = "recovering";
+                        def.LastError = reason;
+                        try { VmStore.Save(def); } catch { }
+                    }
+
+                    EmitState(runtime);
+                    Emit("ft.event", Json.Obj(
+                        "id", id,
+                        "kind", "crash",
+                        "text", "Падение: " + reason,
+                        "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+
+                    bool allowed = def.Restart != RestartPolicy.Never;
+                    if (allowed && def.MaxAttempts > 0 && def.Restarts >= def.MaxAttempts)
+                    {
+                        allowed = false;
+                        reason = "исчерпан лимит попыток (" + def.MaxAttempts + ")";
+                    }
+
+                    if (!allowed)
+                    {
+                        lock (_gate)
+                        {
+                            def.State = "failed";
+                            def.LastError = reason;
+                            try { VmStore.Save(def); } catch { }
+                        }
+
+                        EmitState(runtime);
+                        Emit("ft.event", Json.Obj(
+                            "id", id, "kind", "gave-up", "text", "Автоперезапуск отключён: " + reason,
+                            "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+                        return;
+                    }
+
+                    string restore = def.RestoreOnCrash ? CheckpointStore.NewestRing(def) : null;
+
+                    lock (_gate)
+                    {
+                        def.Restarts++;
+                        try { VmStore.Save(def); } catch { }
+                    }
+
+                    await Task.Delay(500).ConfigureAwait(false);
+
+                    Emit("ft.event", Json.Obj(
+                        "id", id,
+                        "kind", "restart",
+                        "text", restore == null
+                            ? "Перезапуск (без чекпоинта - холодная загрузка)"
+                            : "Восстановление из чекпоинта " + Path.GetFileName(restore),
+                        "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+
+                    await StartAsync(id, false, restore).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception("FT", "автоперезапуск " + id, ex);
+
+                    lock (_gate)
+                    {
+                        def.State = "failed";
+                        def.LastError = "автоперезапуск не удался: " + ex.Message;
+                        try { VmStore.Save(def); } catch { }
+                    }
+
+                    EmitState(runtime);
+                }
+                finally
+                {
+                    runtime.Restarting = false;
+                }
+            });
+        }
+
+        /// <summary>Диагностика и тесты: имитирует падение vmhost (watchdog должен поднять ВМ).</summary>
+        public void KillHost(string id)
+        {
+            VmRuntime runtime = Get(id);
+            VmProcess process;
+            lock (_gate) process = runtime.Proc;
+
+            Log.Warn("FT", "принудительное убийство vmhost " + id);
+            process?.Kill();
+        }
+
+        // ------------------------------------------------------------ служебное
+
+        public void StopAll()
+        {
+            foreach (VmRuntime runtime in Snapshot())
+            {
+                try
+                {
+                    if (runtime.Proc == null || runtime.Proc.HasExited) continue;
+
+                    // при остановке службы диски сохраняем: это не аварийная ситуация
+                    runtime.Proc.ShutdownAsync(20000).GetAwaiter().GetResult();
+                    runtime.Proc.Kill();
+                    runtime.Proc.Dispose();
+                    runtime.Proc = null;
+
+                    runtime.Def.State = "stopped";
+                    VmStore.Save(runtime.Def);
+                    CheckpointStore.ClearRing(runtime.Def);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("VM", "остановка при выходе: " + ex.Message);
+                }
+            }
+        }
+
+        private async Task Command(VmRuntime runtime, string method)
+        {
+            if (runtime.Proc == null || runtime.Proc.HasExited)
+                throw new Hv86Exception("ВМ не запущена");
+
+            object response = await runtime.Proc.Client.CallForResultAsync(method, null, 15000).ConfigureAwait(false);
+            if (response == null) throw new Hv86Exception("нет ответа на " + method);
+        }
+
+        private void OnVmEvent(string id, string name, Dictionary<string, object> data)
+        {
+            if (name == "vm.metrics")
+            {
+                VmRuntime runtime;
+                lock (_gate) _vms.TryGetValue(id, out runtime);
+
+                if (runtime != null)
+                {
+                    runtime.LastBeatUtc = DateTime.UtcNow;
+                    runtime.Instructions = Json.GetLong(data, "instructions", runtime.Instructions);
+                    runtime.Mips = Json.GetInt(data, "mips", runtime.Mips);
+                }
+            }
+
+            if (data == null) data = new Dictionary<string, object>();
+            data["id"] = id;
+
+            Emit(name, data);
+        }
+
+        private void EmitState(VmRuntime runtime)
+        {
+            Emit("vm.state", Json.Obj(
+                "id", runtime.Def.Id,
+                "state", runtime.Def.State,
+                "error", runtime.Def.LastError,
+                "restarts", runtime.Def.Restarts));
+        }
+
+        private void Emit(string name, object data)
+        {
+            Action<string, object> handler = Event;
+            if (handler == null) return;
+
+            try { handler(name, data); }
+            catch (Exception ex) { Log.Warn("VM", "событие " + name + ": " + ex.Message); }
+        }
+
+        private VmRuntime Get(string id)
+        {
+            if (string.IsNullOrEmpty(id)) throw new Hv86Exception("не указан id ВМ");
+
+            VmRuntime runtime;
+            lock (_gate)
+            {
+                if (!_vms.TryGetValue(id, out runtime)) runtime = null;
+            }
+
+            if (runtime == null) throw new Hv86Exception("ВМ не найдена: " + id);
+            return runtime;
+        }
+
+        private List<VmRuntime> Snapshot()
+        {
+            lock (_gate) return new List<VmRuntime>(_vms.Values);
+        }
+
+        private string TempStatePath(string id)
+        {
+            string dir = Path.Combine(Paths.VmDir(id), "temp");
+            Directory.CreateDirectory(dir);
+            return Path.Combine(dir, "state-" + Guid.NewGuid().ToString("N").Substring(0, 10) + ".bin");
+        }
+
+        private static void TryDelete(string path)
+        {
+            try { if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path); } catch { }
+        }
+
+        private static int RoundPow2(int value)
+        {
+            int result = 16;
+            while (result < value && result < 1024) result *= 2;
+            return result;
+        }
+
+        public void Dispose()
+        {
+            _disposed = true;
+            try { StopAll(); } catch { }
+        }
+    }
+}

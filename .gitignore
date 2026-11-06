@@ -1,0 +1,22 @@
+# build output
+bin/
+obj/
+publish/
+
+# generated / downloaded (see tools/fetch-*.ps1)
+lib/webview2/
+assets/v86/
+.preview/
+data/
+
+# preview renders of the icon (assets/hv86.ico is committed)
+assets/icon-preview.png
+assets/hv86-16.png
+assets/hv86-32.png
+assets/hv86-64.png
+assets/hv86-256.png
+
+# local
+*.user
+*.log
+.vs/

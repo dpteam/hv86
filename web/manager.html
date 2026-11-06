@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>hv86</title>
+<style>/*{{THEME}}*/</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="mark" width="24" height="24" viewBox="0 0 48 48" aria-hidden="true">
+        <defs>
+          <linearGradient id="hv86top" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#8ADDFF"/>
+            <stop offset="1" stop-color="#379DEE"/>
+          </linearGradient>
+        </defs>
+        <path d="M24 5 L41 13.5 L24 22 L7 13.5 Z" fill="url(#hv86top)"/>
+        <path d="M24 12.5 L41 21 L24 29.5 L7 21 Z" fill="#0A2A46"/>
+        <path d="M24 17 L41 25.5 L24 34 L7 25.5 Z" fill="#3B93DC"/>
+        <path d="M24 24.5 L41 33 L24 41.5 L7 33 Z" fill="#0A2A46"/>
+        <path d="M24 29 L41 37.5 L24 46 L7 37.5 Z" fill="#215F96"/>
+        <path d="M24 5 L41 13.5 L24 22 L7 13.5 Z" fill="none" stroke="#D6F4FF" stroke-opacity=".55" stroke-width="1.2"/>
+      </svg>
+      <div class="name">hv<span>86</span></div>
+      <div class="sub" data-i18n="app.sub">hypervisor · v86 engine</div>
+    </div>
+
+    <div class="pill" id="servicePill">
+      <span class="dot"></span>
+      <span id="serviceText" data-i18n="svc.checking">checking service…</span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <button class="btn ghost" data-act="refresh" data-i18n="btn.refresh">Refresh</button>
+    <button class="btn primary" data-act="new" data-i18n="btn.newVm">New VM…</button>
+    <select id="lang" class="btn" style="padding:4px 6px">
+      <option value="ru">RU</option>
+      <option value="en">EN</option>
+    </select>
+  </header>
+
+  <div class="body">
+
+    <aside class="tree">
+      <div class="tree-head" data-i18n="tree.host">Host</div>
+      <div class="tree-scroll">
+        <div class="tree-host">
+          <span class="glyph">▣</span>
+          <span>hv86</span>
+          <span class="dim mono" id="hostBit" style="margin-left:auto;font-size:10px"></span>
+        </div>
+        <div id="treeVms"></div>
+      </div>
+    </aside>
+
+    <main class="main">
+
+      <section class="list-pane">
+        <div class="pane-head">
+          <span data-i18n="pane.vms">Virtual machines</span>
+          <span class="right mono dim" id="vmCount"></span>
+        </div>
+
+        <div class="table-wrap">
+          <table class="vm">
+            <thead>
+              <tr>
+                <th data-i18n="col.name">Name</th>
+                <th data-i18n="col.state">State</th>
+                <th data-i18n="col.memory">Memory</th>
+                <th data-i18n="col.disk">Disk / media</th>
+                <th data-i18n="col.mips">MIPS</th>
+                <th data-i18n="col.uptime">Uptime</th>
+                <th data-i18n="col.ft">FT</th>
+                <th data-i18n="col.restarts">Restarts</th>
+              </tr>
+            </thead>
+            <tbody id="vmRows"></tbody>
+          </table>
+
+          <div class="empty" id="emptyState">
+            <h3 data-i18n="empty.title">No virtual machines yet</h3>
+            <div data-i18n="empty.text">Create one from a preset (FreeDOS, KolibriOS, TinyCore) or from your own ISO.</div>
+            <div style="margin-top:14px">
+              <button class="btn primary" data-act="new" data-i18n="btn.newVm">New VM…</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="actions">
+        <div class="group-title" data-i18n="act.selected">Selected</div>
+        <div class="selected" id="selectedName">—</div>
+
+        <div class="stack">
+          <button class="btn primary" data-act="vm.console" data-vm="1" data-i18n="act.connect">Connect</button>
+          <button class="btn" data-act="vm.start" data-vm="1" data-i18n="act.start">Start</button>
+          <button class="btn" data-act="vm.pause" data-vm="1" data-i18n="act.pause">Pause</button>
+          <button class="btn" data-act="vm.reset" data-vm="1" data-i18n="act.reset">Reset</button>
+          <button class="btn" data-act="vm.stop" data-vm="1" data-i18n="act.stop">Stop</button>
+        </div>
+
+        <div class="group-title" data-i18n="act.snapshots">Snapshots</div>
+        <div class="stack">
+          <button class="btn" data-act="vm.snapshot" data-vm="1" data-i18n="act.snapshot">Take snapshot…</button>
+          <button class="btn" data-act="vm.snapshots" data-vm="1" data-i18n="act.snapshotsList">Snapshot manager…</button>
+        </div>
+
+        <div class="group-title" data-i18n="act.media">Media</div>
+        <div class="stack">
+          <button class="btn" data-act="vm.mount" data-vm="1" data-i18n="act.mount">Insert ISO / image…</button>
+          <button class="btn" data-act="vm.eject" data-vm="1" data-i18n="act.eject">Eject CD</button>
+        </div>
+
+        <div class="group-title" data-i18n="act.vm">Virtual machine</div>
+        <div class="stack">
+          <button class="btn" data-act="vm.settings" data-vm="1" data-i18n="act.settings">Settings…</button>
+          <button class="btn" data-act="vm.clone" data-vm="1" data-i18n="act.clone">Clone…</button>
+          <button class="btn" data-act="vm.export" data-vm="1" data-i18n="act.export">Export…</button>
+          <button class="btn" data-act="open.vm" data-vm="1" data-i18n="act.openFolder">Open VM folder</button>
+          <button class="btn danger" data-act="vm.delete" data-vm="1" data-i18n="act.delete">Delete VM…</button>
+        </div>
+
+        <div class="group-title" data-i18n="act.host">Host</div>
+        <div class="scroll">
+          <button class="menu-item" data-act="vm.import" data-i18n="act.import">Import VM…</button>
+          <button class="menu-item" data-act="host.diagnostics" data-i18n="act.diagnostics">Export diagnostics</button>
+          <button class="menu-item" data-act="service.install" data-i18n="act.svcInstall">Install service…</button>
+          <button class="menu-item" data-act="service.start" data-i18n="act.svcStart">Start service</button>
+          <button class="menu-item" data-act="service.stop" data-i18n="act.svcStop">Stop service</button>
+          <button class="menu-item" data-act="service.uninstall" data-i18n="act.svcUninstall">Uninstall service…</button>
+          <button class="menu-item" data-act="open.logs" data-i18n="act.openLogs">Open logs folder</button>
+          <button class="menu-item" data-act="host.log" data-i18n="act.tailLog">Show host log</button>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <section class="log-pane">
+    <div class="log-head">
+      <span data-i18n="log.title">Events</span>
+      <span class="right">
+        <button class="btn ghost" data-act="log.clear" data-i18n="log.clear">Clear</button>
+      </span>
+    </div>
+    <div class="log-list" id="logList"></div>
+  </section>
+
+  <footer class="statusbar">
+    <span id="statusService">service: —</span>
+    <span class="sep">|</span>
+    <span id="statusHost">host: —</span>
+    <span class="sep">|</span>
+    <span id="statusData"></span>
+    <span class="sep">|</span>
+    <span id="statusVersion">hv86 {{VERSION}}</span>
+  </footer>
+</div>
+
+<!-- ------------------------------------------------------------- новая ВМ -->
+<div class="overlay hidden" id="newVmModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span data-i18n="new.title">New virtual machine</span>
+      <button class="x" data-close="newVmModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label data-i18n="new.name">Name</label>
+        <input type="text" id="newName" placeholder="my-vm">
+      </div>
+
+      <div class="field">
+        <label data-i18n="new.preset">Preset</label>
+        <select id="newPreset"></select>
+        <div class="hint" id="newPresetHint"></div>
+      </div>
+
+      <div class="field">
+        <div class="grid2">
+          <div>
+            <label data-i18n="new.memory">Memory, MB</label>
+            <select id="newMemory">
+              <option>32</option><option>64</option><option selected>128</option>
+              <option>256</option><option>512</option><option>1024</option>
+            </select>
+          </div>
+          <div>
+            <label data-i18n="new.disk">System disk, MB</label>
+            <input type="number" id="newDisk" value="128" min="0" max="2048" step="16">
+          </div>
+        </div>
+        <div class="hint" data-i18n="new.diskHint">0 = diskless. A 128 MB sparse image is enough for TinyCore/FreeDOS.</div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="new.iso">Or attach your own ISO / image</label>
+        <div class="row">
+          <input type="text" id="newIso" placeholder="D:\iso\alpine.iso">
+          <button class="btn" data-act="pick.file" data-target="newIso" data-i18n="new.browse">Browse…</button>
+        </div>
+        <div class="hint" data-i18n="new.isoHint">Any bootable image: Linux, DOS, Windows 9x, hobby OS. v86 is 32-bit only.</div>
+      </div>
+
+      <div class="field">
+        <label class="check"><input type="checkbox" id="newAutostart"> <span data-i18n="new.autostart">Start with the service</span></label>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close="newVmModal" data-i18n="btn.cancel">Cancel</button>
+      <button class="btn primary" data-act="vm.create" data-i18n="btn.create">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------ снапшоты -->
+<div class="overlay hidden" id="snapModal">
+  <div class="modal wide">
+    <div class="modal-head">
+      <span data-i18n="snap.title">Snapshots</span>
+      <button class="x" data-close="snapModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="snap-list" id="snapList"></div>
+      <div class="empty hidden" id="snapEmpty">
+        <div data-i18n="snap.empty">No snapshots yet</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close="snapModal" data-i18n="btn.close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ------------------------------------------------- имя снапшота / вопрос -->
+<div class="overlay hidden" id="askModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="askTitle">—</span>
+      <button class="x" data-close="askModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label id="askLabel"></label>
+        <input type="text" id="askInput">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close="askModal" data-i18n="btn.cancel">Cancel</button>
+      <button class="btn primary" id="askOk" data-i18n="btn.ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------ настройки ВМ -->
+<div class="overlay hidden" id="settingsModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span data-i18n="set.title">VM settings</span>
+      <button class="x" data-close="settingsModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label data-i18n="new.name">Name</label>
+        <input type="text" id="setName">
+      </div>
+
+      <div class="field">
+        <div class="grid2">
+          <div>
+            <label data-i18n="new.memory">Memory, MB</label>
+            <select id="setMemory">
+              <option>32</option><option>64</option><option>128</option>
+              <option>256</option><option>512</option><option>1024</option>
+            </select>
+          </div>
+          <div>
+            <label class="check" style="margin-top:22px">
+              <input type="checkbox" id="setAutostart">
+              <span data-i18n="new.autostart">Start with the service</span>
+            </label>
+          </div>
+        </div>
+        <div class="hint" data-i18n="set.memoryHint">Memory applies after the VM is stopped and clears old checkpoints.</div>
+      </div>
+
+      <div class="group-title" data-i18n="set.ft">Fault tolerance</div>
+
+      <div class="field">
+        <div class="grid2">
+          <div>
+            <label data-i18n="set.ftMode">Mode</label>
+            <select id="setFtMode">
+              <option value="off">off</option>
+              <option value="checkpoint">checkpoint</option>
+            </select>
+          </div>
+          <div>
+            <label data-i18n="set.interval">Checkpoint interval, s</label>
+            <input type="number" id="setInterval" min="2" max="600" step="1">
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="grid2">
+          <div>
+            <label data-i18n="set.keep">Keep checkpoints</label>
+            <input type="number" id="setKeep" min="1" max="10" step="1">
+          </div>
+          <div>
+            <label data-i18n="set.restart">Restart policy</label>
+            <select id="setRestart">
+              <option value="always">always</option>
+              <option value="on-failure">on-failure</option>
+              <option value="never">never</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="grid2">
+          <div>
+            <label data-i18n="set.attempts">Max restart attempts</label>
+            <input type="number" id="setAttempts" min="0" max="100" step="1">
+          </div>
+          <div>
+            <label class="check" style="margin-top:22px">
+              <input type="checkbox" id="setRestore">
+              <span data-i18n="set.restore">Restore from the latest checkpoint</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="group-title" data-i18n="set.forwards">Port forwarding</div>
+
+      <div class="field">
+        <div class="snap-list" id="fwdList"></div>
+        <div class="row" style="margin-top:8px">
+          <input type="number" id="fwdHost" min="1" max="65535" placeholder="host port">
+          <span class="dim" style="align-self:center">→</span>
+          <input type="number" id="fwdGuest" min="1" max="65535" placeholder="guest port">
+          <button class="btn" data-act="fwd.add" data-i18n="set.fwdAdd">Add</button>
+        </div>
+        <div class="hint" data-i18n="set.fwdHint">Listens on 127.0.0.1. The guest needs its network up (DHCP) before ports answer.</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close="settingsModal" data-i18n="btn.cancel">Cancel</button>
+      <button class="btn primary" data-act="vm.update" data-i18n="btn.save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------- контекстное меню -->
+<div class="ctx hidden" id="ctxMenu"></div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>//{{I18N}}</script>
+<script>//{{JS}}</script>
+</body>
+</html>

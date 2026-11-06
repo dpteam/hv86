@@ -1,0 +1,130 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    hv86 - гипервизор на v86: WinForms-шелл + WebView2 UI + служба.
+
+    Правила (AGENTS.md):
+      * управляемая часть WebView2 SDK лежит в lib\webview2 и подключается по
+        HintPath; NuGet-пакеты не используются. Скачивание: tools\fetch-webview2.ps1;
+      * UI лежит в web\ и вшивается в exe (EmbeddedResource + LogicalName);
+      * v86 (libv86.js, wasm, BIOS) лежит в assets\v86\<version>\ и вшивается
+        в exe. Скачивание: tools\fetch-v86.ps1. Версия пиннится: снапшоты
+        несовместимы между версиями;
+      * сборка - tools\build.cmd, публикация - tools\publish.cmd.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <AssemblyName>hv86</AssemblyName>
+    <RootNamespace>Hv86</RootNamespace>
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+
+    <OutputPath>bin\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>assets\hv86.ico</ApplicationIcon>
+
+    <Version>0.1.0</Version>
+    <FileVersion>0.1.0.0</FileVersion>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <Product>hv86</Product>
+    <Company>DPT</Company>
+    <Copyright>MIT. v86 (c) copy, BSD-2-Clause.</Copyright>
+
+    <DebugType>portable</DebugType>
+    <Optimize>true</Optimize>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!--
+      CS1591 - нет XML-документации
+      CA1416 - платформенные предупреждения: цель сборки - только Windows
+      SYSLIB0014 - WebClient помечен устаревшим, но для простых загрузок хорош
+    -->
+    <NoWarn>$(NoWarn);CS1591;CA1416;SYSLIB0014</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="src\**\*.cs" />
+  </ItemGroup>
+
+  <!-- WebView2 SDK: managed DLL + нативный загрузчик рядом с exe -->
+  <ItemGroup>
+    <Reference Include="Microsoft.Web.WebView2.Core">
+      <HintPath>lib\webview2\Microsoft.Web.WebView2.Core.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.WinForms">
+      <HintPath>lib\webview2\Microsoft.Web.WebView2.WinForms.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <None Include="lib\webview2\WebView2Loader.dll">
+      <Link>WebView2Loader.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- UI: вшивается в exe, наружу не распаковывается -->
+  <ItemGroup>
+    <EmbeddedResource Include="web\manager.html">
+      <LogicalName>Hv86.Web.manager.html</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="web\manager.js">
+      <LogicalName>Hv86.Web.manager.js</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="web\console.html">
+      <LogicalName>Hv86.Web.console.html</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="web\console.js">
+      <LogicalName>Hv86.Web.console.js</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="web\theme.css">
+      <LogicalName>Hv86.Web.theme.css</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="web\i18n\ru.json">
+      <LogicalName>Hv86.Web.i18n.ru.json</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="web\i18n\en.json">
+      <LogicalName>Hv86.Web.i18n.en.json</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <!-- v86: пиннится по версии, версия дублируется в manifest.json -->
+  <ItemGroup>
+    <EmbeddedResource Include="assets\v86\0.5.473\libv86.js">
+      <LogicalName>Hv86.Assets.v86.libv86.js</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="assets\v86\0.5.473\v86.wasm">
+      <LogicalName>Hv86.Assets.v86.v86.wasm</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="assets\v86\0.5.473\seabios.bin">
+      <LogicalName>Hv86.Assets.v86.seabios.bin</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="assets\v86\0.5.473\vgabios.bin">
+      <LogicalName>Hv86.Assets.v86.vgabios.bin</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="assets\presets.json">
+      <LogicalName>Hv86.Assets.presets.json</LogicalName>
+    </EmbeddedResource>
+
+    <!-- Иконка: одна на exe, окна, трей и визард (tools\make-icon.ps1) -->
+    <EmbeddedResource Include="assets\hv86.ico">
+      <LogicalName>Hv86.Assets.hv86.ico</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>
