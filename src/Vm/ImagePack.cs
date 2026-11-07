@@ -17,8 +17,8 @@ namespace Hv86.Vm
     ///
     /// Правила:
     ///   * `PK..`  - ZIP: если внутри ровно один образ - распаковываем его;
-    ///   * `Rar!` / `7z..` - честно отказываем: в BCL их нет, а тащить
-    ///     сторонний распаковщик ради каталога - не то, за что стоит платить;
+    ///   * `Rar!` / `7z..` - распаковываем внешним 7-Zip, если он есть
+    ///     (см. <see cref="SevenZip"/>), иначе честный отказ с инструкцией;
     ///   * `CD001` по смещению 0x8001 - ISO (CD);
     ///   * всё остальное - считаем образом как есть (флоппи/винчестер).
     /// </summary>
@@ -82,37 +82,33 @@ namespace Hv86.Vm
         }
 
         /// <summary>
-        /// Возвращает путь к настоящему образу. ZIP с единственным образом
-        /// распаковывается рядом с архивом; RAR/7z и «россыпь файлов» - отказ
+        /// Возвращает путь к настоящему образу. ZIP/RAR/7z с единственным
+        /// образом распаковывается рядом с архивом; «россыпь файлов» - отказ
         /// с понятным текстом, чтобы не создавать ВМ, которая не загрузится.
         /// </summary>
         public static string Unwrap(string file)
         {
             string kind = Detect(file);
 
-            if (kind == KindRar || kind == KindSevenZip)
-                throw new Hv86Exception("образ упакован в " + kind.ToUpperInvariant() +
-                                        ": этот формат не поддерживается, распакуйте вручную и подключите файлом");
+            if (kind == KindZip) return UnzipImage(file);
 
-            if (kind != KindZip) return file;
+            if (kind == KindRar || kind == KindSevenZip) return ExternalImage(file, kind);
 
-            return UnzipImage(file);
+            return file;
         }
 
         /// <summary>
         /// Все образы из файла по порядку: одиночный образ - один элемент,
-        /// ZIP с комплектом дискет - сколько внутри. Комплект нужен, чтобы
+        /// архив с комплектом дискет - сколько внутри. Комплект нужен, чтобы
         /// можно было «вставить следующую дискету» в консоли.
         /// </summary>
         public static List<string> UnwrapSet(string file)
         {
-            List<string> result = new List<string>();
-
             string kind = Detect(file);
 
-            if (kind == KindRar || kind == KindSevenZip)
-                throw new Hv86Exception("образ упакован в " + kind.ToUpperInvariant() +
-                                        ": этот формат не поддерживается, распакуйте вручную и подключите файлом");
+            if (kind == KindRar || kind == KindSevenZip) return ExternalImages(file, kind);
+
+            List<string> result = new List<string>();
 
             if (kind != KindZip)
             {
@@ -167,6 +163,77 @@ namespace Hv86.Vm
             {
                 throw new Hv86Exception("не удалось разобрать архив " + Path.GetFileName(file) + ": " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Один образ из архива RAR/7z: ровно один - берём его; несколько -
+        /// тот, у которого размер как у настоящего носителя.
+        /// </summary>
+        private static string ExternalImage(string file, string kind)
+        {
+            List<string> images = ExternalImages(file, kind);
+
+            string pick = null;
+
+            if (images.Count == 1) pick = images[0];
+            else
+            {
+                List<string> known = images.Where(p => IsKnownSize(new FileInfo(p).Length)).ToList();
+                if (known.Count == 1) pick = known[0];
+            }
+
+            if (pick == null)
+                throw new Hv86Exception("в архиве нет одного образа (" + images.Count +
+                                        " кандидатов): " + string.Join(", ",
+                                            images.Take(5).Select(p => Path.GetFileName(p))));
+
+            return pick;
+        }
+
+        /// <summary>
+        /// Распаковка RAR/7z внешним 7-Zip. Внутри архивов old-dos.ru файлы
+        /// лежат и в подкаталогах, поэтому смотрим рекурсивно и сортируем
+        /// по имени файла - «диск 1» должен идти первым.
+        /// </summary>
+        private static List<string> ExternalImages(string file, string kind)
+        {
+            if (!SevenZip.Available)
+                throw new Hv86Exception("образ упакован в " + kind.ToUpperInvariant() +
+                                        ": нужен 7-Zip (установите его или положите 7z.exe рядом с hv86.exe)");
+
+            string dir = Path.Combine(Path.GetDirectoryName(file) ?? ".",
+                Path.GetFileNameWithoutExtension(file) + ".unpacked");
+
+            List<string> images = ImagesIn(dir);
+
+            // уже распаковывали в прошлый раз
+            if (images.Count == 0)
+            {
+                try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+
+                SevenZip.ExtractAll(file, dir);
+                images = ImagesIn(dir);
+            }
+
+            if (images.Count == 0)
+                throw new Hv86Exception("в архиве нет образов: " + Path.GetFileName(file));
+
+            Log.Info("PRESET", "7-Zip: образов в архиве " + images.Count + " (" + Path.GetFileName(file) + ")");
+            return images;
+        }
+
+        private static List<string> ImagesIn(string dir)
+        {
+            List<string> found = new List<string>();
+
+            if (!Directory.Exists(dir)) return found;
+
+            foreach (string path in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+                if (Array.IndexOf(ImageExtensions, Path.GetExtension(path).ToLowerInvariant()) >= 0)
+                    found.Add(path);
+
+            found.Sort((a, b) => NaturalCompare(Path.GetFileName(a), Path.GetFileName(b)));
+            return found;
         }
 
         /// <summary>Сравнение имён с числами: disk2 раньше disk10.</summary>

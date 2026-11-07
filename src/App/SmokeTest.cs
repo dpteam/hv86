@@ -13,6 +13,9 @@ namespace Hv86.App
     /// загрузку гостя, снимает state, перезапускает ВМ из этого state и
     /// проверяет, что она снова исполняет инструкции.
     ///
+    /// Образ может быть любым: дискета (fda), жёсткий диск (hda) или ISO (cdrom) -
+    /// тип определяется по сигнатуре, а от него зависит порядок загрузки.
+    ///
     /// Проверяется сразу всё, что легко сломать: WebView2 в нужной сессии,
     /// v86, отдача образов по Range, приём state кусками, восстановление.
     /// </summary>
@@ -42,27 +45,51 @@ namespace Hv86.App
 
             try
             {
+                // тип носителя по сигнатуре: от него зависит порядок загрузки
+                string kind = ImagePack.Detect(imagePath);
+
+                string bootOrder =
+                    kind == ImagePack.KindIso ? "CD_HARDDISK_FLOPPY" :
+                    new FileInfo(imagePath).Length >= 2 * 1024 * 1024 ? "HARDDISK_CD_FLOPPY" :
+                    "FLOPPY_CD_HARDDISK";
+
                 VmDefinition vm = new VmDefinition
                 {
                     Id = id,
                     Name = "smoke",
                     MemoryMb = 32,
                     VgaMemoryMb = 4,
-                    BootOrder = "FLOPPY_CD_HARDDISK",
+                    BootOrder = bootOrder,
                     HdaFile = null,
                     State = "running"
                 };
 
                 Paths.EnsureVmDirectories(id);
 
-                string target = Path.Combine(Paths.VmMediaDir(id), "floppy.img");
-                File.Copy(imagePath, target, true);
-                vm.FdaFile = Paths.Relative(id, target);
+                if (kind == ImagePack.KindIso)
+                {
+                    string cd = Path.Combine(Paths.VmMediaDir(id), "boot.iso");
+                    File.Copy(imagePath, cd, true);
+                    vm.CdromFile = Paths.Relative(id, cd);
+                }
+                else if (bootOrder.StartsWith("HARDDISK", StringComparison.Ordinal))
+                {
+                    string disk = Path.Combine(Paths.VmDisksDir(id), "system.img");
+                    File.Copy(imagePath, disk, true);
+                    vm.HdaFile = Paths.Relative(id, disk);
+                }
+                else
+                {
+                    string target = Path.Combine(Paths.VmMediaDir(id), "floppy.img");
+                    File.Copy(imagePath, target, true);
+                    vm.FdaFile = Paths.Relative(id, target);
+                }
 
                 VmStore.Save(vm);
 
                 Console.WriteLine("hv86 smoke test");
                 Console.WriteLine("  image: " + imagePath);
+                Console.WriteLine("  kind:  " + kind + " (" + bootOrder + ")");
                 Console.WriteLine("  root:  " + Paths.Root);
 
                 int code = new VmHostRunner(id, false, null, true).Run();

@@ -111,6 +111,12 @@ namespace Hv86.App
                 Check(false, "data dir is writable", ex.Message);
             }
 
+            // ---- RAR/7z: необязательная зависимость, честно показываем её состояние
+            Line("");
+            string sevenZip = SevenZip.FindTool();
+
+            Line("7-Zip for RAR/7z: " + (sevenZip ?? "не найден (RAR/7z будут отказывать)"));
+
             // ---- служба
             ServiceStatus status = ServiceManager.Query();
             Line("");

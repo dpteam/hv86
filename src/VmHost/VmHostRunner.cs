@@ -1367,10 +1367,11 @@ namespace Hv86.VmHost
                 "non-system disk", "non-system or disk error", "invalid system disk",
                 "operating system not found", "missing operating system", "no bootable",
                 "not a bootable disk", "disk i/o error", "error loading operating system",
-                "boot failure", "no os found",
-                // WinImage пишет это в загрузочный сектор при форматировании:
+                "boot failure", "boot failed", "no os found",
+                "could not read from cdrom",
+                // WinImage/MagicISO пишут это в загрузочный сектор при форматировании:
                 // такая дискета данных не грузится, даже если файлы на ней есть
-                "disk formatted with winimage", "this disk is not bootable"
+                "disk formatted with", "this disk is not bootable"
             };
 
             string lower = text.ToLowerInvariant();
@@ -1404,12 +1405,13 @@ namespace Hv86.VmHost
 
             // что на экране: счётчик инструкций не отличает загрузку от
             // «BIOS не нашёл систему» - там гость тоже крутится, только зря.
-            // Медленные загрузчики печатают своё уже после SeaBIOS, поэтому
-            // смотрим до трёх раз, пока на экране всё ещё только BIOS.
+            // Медленные загрузчики (и CD, с которого BIOS читает загрузчик
+            // дольше) печатают своё уже после SeaBIOS, поэтому смотрим, пока
+            // на экране всё ещё только BIOS.
             string flat = "";
             bool graphics = false;
 
-            for (int attempt = 0; attempt < 8; attempt++)
+            for (int attempt = 0; attempt < 15; attempt++)
             {
                 Dictionary<string, object> screen = await ProbeScreenAsync().ConfigureAwait(true);
 
@@ -1421,14 +1423,10 @@ namespace Hv86.VmHost
 
                 graphics = Json.GetBool(screen, "graphics", false);
 
-                if (flat.Length > 200) flat = flat.Substring(0, 200);
+                if (flat.Length > 400) flat = flat.Substring(0, 400);
 
-                if (LooksLikeBootFailure(flat))
-                {
-                    Log.Error("SMOKE", "гость не загрузился: " + flat);
-                    FinishSmoke(1);
-                    return;
-                }
+                // сообщение об ошибке загрузки - уже ответ, ждать нечего
+                if (LooksLikeBootFailure(flat)) break;
 
                 bool biosOnly = flat.Length == 0 ||
                     flat.IndexOf("SeaBIOS", StringComparison.OrdinalIgnoreCase) >= 0;
@@ -1439,7 +1437,14 @@ namespace Hv86.VmHost
             }
 
             Log.Info("SMOKE", (flat.Length > 0 ? "экран: " + flat : "экран: пусто") +
-                (graphics ? " · гостевой видеорежим (графика)" : ""));
+                (graphics ? " [графика]" : ""));
+
+            if (LooksLikeBootFailure(flat))
+            {
+                Log.Error("SMOKE", "гость не загрузился: " + flat);
+                FinishSmoke(1);
+                return;
+            }
 
             string statePath = Path.Combine(Paths.Root, "smoke-state.bin");
 
@@ -1495,7 +1500,11 @@ namespace Hv86.VmHost
             Log.Info("SMOKE", "перезапуск из state ...");
             SendBoot();
 
-            bool restored = await WaitUntilAsync(delegate { return _instructions > 500000; }, 60000).ConfigureAwait(true);
+            // Порог маленький намеренно: гость на приглашении (HLT в ожидании
+    // клавиатуры) исполняет только обработчик таймера - это сотни инструкций
+    // в секунду, а не миллионы. Нам нужно доказать, что ЦП ожил, а не что
+    // гость чем-то занят.
+    bool restored = await WaitUntilAsync(delegate { return _instructions > 2000; }, 60000).ConfigureAwait(true);
 
             if (!restored)
             {

@@ -71,13 +71,40 @@ function naturalCompare(a, b) {
     return a.length - b.length;
 }
 
-/** Список образов из архива: `tar -tf` понимает zip начиная с Windows 10. */
-function listArchive(file) {
-    const result = spawnSync("tar", ["-tf", file], { encoding: "utf8", windowsHide: true });
+/** Сигнатура архива: расширению из dl.php верить нельзя. */
+function signature(file) {
+    const fd = fs.openSync(file, "r");
+    const head = Buffer.alloc(8);
 
-    if (result.status !== 0) return null;
+    try { fs.readSync(fd, head, 0, 8, 0); } finally { fs.closeSync(fd); }
 
-    return result.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (head[0] === 0x50 && head[1] === 0x4b) return "zip";
+    if (head[0] === 0x52 && head[1] === 0x61 && head[2] === 0x72) return "rar";
+    if (head[0] === 0x37 && head[1] === 0x7a) return "7z";
+    return "raw";
+}
+
+/** Тот же поиск 7-Zip, что и в приложении (Vm/SevenZip.cs). */
+function find7z() {
+    const explicit = process.env.HV86_7Z;
+    if (explicit && fs.existsSync(explicit)) return explicit;
+
+    const names = ["7z.exe", "7za.exe", "7zr.exe"];
+    const dirs = ["", process.env.ProgramFiles, process.env["ProgramFiles(x86)"], ...(process.env.PATH || "").split(";")];
+
+    for (let dir of dirs) {
+        if (!dir) continue;
+        dir = dir.trim().replace(/^"|"$/g, "");
+        if (!dir) continue;
+
+        for (const name of names) {
+            for (const candidate of [path.join(dir, name), path.join(dir, "7-Zip", name)]) {
+                try { if (fs.existsSync(candidate)) return candidate; } catch { }
+            }
+        }
+    }
+
+    return null;
 }
 
 function walk(dir, out) {
@@ -92,16 +119,30 @@ function walk(dir, out) {
 }
 
 /**
- * Распаковывает архив целиком: вытащить один файл по имени нельзя - в именах
- * из old-dos.ru встречаются квадратные скобки (`[!]`), а bsdtar читает их как
- * маску и «не находит» файл.
+ * Распаковывает архив целиком и возвращает пути к образам.
+ *
+ * Имя файла не передаём: в именах из old-dos.ru встречаются квадратные скобки
+ * (`[!]`), а и tar, и 7z читают их как маску и «не находят» файл. RAR/7z
+ * распаковывает внешний 7-Zip, ZIP - tar (он же bsdtar, есть в Windows 10+).
  */
-function extractAll(file, dir) {
+function unpack(file, dir) {
     fs.mkdirSync(dir, { recursive: true });
 
-    const result = spawnSync("tar", ["-xf", file, "-C", dir], { encoding: "utf8", windowsHide: true });
+    const kind = signature(file);
 
-    if (result.status !== 0) return null;
+    let result;
+
+    if (kind === "rar" || kind === "7z") {
+        const sevenZip = find7z();
+        if (!sevenZip) throw new Error("нужен 7-Zip для " + kind);
+
+        result = spawnSync(sevenZip, ["x", "-y", "-sccUTF-8", "-o" + dir, file],
+            { encoding: "utf8", windowsHide: true });
+    } else {
+        result = spawnSync("tar", ["-xf", file, "-C", dir], { encoding: "utf8", windowsHide: true });
+    }
+
+    if (result.status > 1) return null;
 
     return walk(dir, []).filter((f) => isImage(path.basename(f)));
 }
@@ -117,7 +158,7 @@ function screenFromLog(dir) {
 
         for (let i = lines.length - 1; i >= 0; i--) {
             const marker = lines[i].indexOf("экран:");
-            if (marker >= 0) return lines[i].slice(marker + 6).trim();
+            if (marker >= 0) return lines[i].slice(marker + 6).replace(/\s*\[графика\]\s*$/, "").trim();
         }
     }
 
@@ -143,19 +184,11 @@ for (const item of candidates) {
             fs.writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
         }
 
-        const entries = (listArchive(archive) || []).filter(isImage);
+        const unpacked = unpack(archive, path.join(work, "unpack-" + id));
 
-        if (entries.length === 0) {
-            record.verdict = "no image";
-            out.push(record);
-            continue;
-        }
+        if (!unpacked || unpacked.length === 0) throw new Error("в архиве нет образов");
 
-        const unpacked = extractAll(archive, path.join(work, "unpack-" + id));
-
-        if (!unpacked || unpacked.length === 0) throw new Error("не удалось распаковать архив");
-
-        // первая дискета: именно с неё ВМ стартует
+        // первая дискета (или единственный ISO): именно с неё ВМ стартует
         unpacked.sort((a, b) => naturalCompare(path.basename(a), path.basename(b)));
 
         const target = unpacked[0];
@@ -181,11 +214,16 @@ for (const item of candidates) {
             .replace(/Booting from [A-Za-z]+\.\.\./i, " ")
             .trim();
 
-        if (run.status !== 0) {
+        // сообщение BIOS о незагрузочном носителе важнее кода выхода: smoke
+        // падает именно потому, что загружаться нечему
+        const failed = /non-system|no bootable|not a bootable|missing operating|operating system not found|invalid system disk|disk formatted with|boot failed|could not read from cdrom/i
+            .test(record.screen);
+
+        if (failed) {
+            record.verdict = "not bootable";
+        } else if (run.status !== 0) {
             record.verdict = "smoke failed";
             record.note = (run.stdout || "").split(/\r?\n/).filter(Boolean).slice(-2).join(" ");
-        } else if (/non-system|no bootable|not a bootable|missing operating|operating system not found|invalid system disk/i.test(record.screen)) {
-            record.verdict = "not bootable";
         } else if (guestText.length === 0) {
             record.verdict = "graphics or silent";
         } else if (guestText.length < 40) {

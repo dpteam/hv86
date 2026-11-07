@@ -416,7 +416,7 @@ namespace Hv86.App
             try { ImagePack.Unwrap(rarPath); }
             catch (Hv86Exception) { refused = true; }
 
-            Check(refused, "pack: rar is refused with a message");
+            Check(refused, "pack: corrupt rar is refused with a message");
 
             // 4. ISO: сигнатура CD001 по смещению 0x8001
             string isoPath = Path.Combine(pack, "cd.iso");
@@ -431,7 +431,6 @@ namespace Hv86.App
             // 5. Обычный образ - как есть
             Check(ImagePack.Detect(floppy) == ImagePack.KindRaw &&
                   ImagePack.Unwrap(floppy) == floppy, "pack: raw image is used as is");
-
             // 6. Набор дискет: все образы по порядку, а не "какой брать"
             List<string> set = ImagePack.UnwrapSet(twoPath);
 
@@ -477,6 +476,80 @@ namespace Hv86.App
             Check(Json.GetInt(back.ToView(), "floppy_count", 0) == 3 &&
                   Json.GetInt(back.ToView(), "floppy_index", -1) == 1,
                 "pack: view reports floppy set size and position");
+
+            // 9. RAR/7z: только через внешний 7-Zip, иначе честный отказ
+            string rarFile = Path.Combine(pack, "two.rar");
+            File.Copy(twoPath, rarFile, true);
+
+            // подменяем сигнатуру: для наших правил этого достаточно
+            byte[] rarCopy = File.ReadAllBytes(rarFile);
+            rarCopy[0] = (byte)'R'; rarCopy[1] = (byte)'a'; rarCopy[2] = (byte)'r'; rarCopy[3] = (byte)'!';
+            File.WriteAllBytes(rarFile, rarCopy);
+
+            string tool = SevenZip.FindTool();
+
+            if (tool == null)
+            {
+                bool refused7z = false;
+
+                try { ImagePack.Unwrap(rarFile); }
+                catch (Hv86Exception ex) { refused7z = ex.Message.IndexOf("7-Zip", StringComparison.Ordinal) >= 0; }
+
+                Check(refused7z, "pack: rar without 7-Zip is refused with a hint");
+            }
+            else
+            {
+                // 7z не любит два одинаковых имени в одном архиве - кладём
+                // копии под разными именами, как в настоящем комплекте
+                string zdir = Path.Combine(pack, "zdir");
+                Directory.CreateDirectory(zdir);
+
+                File.Copy(floppy, Path.Combine(zdir, "disk1.img"), true);
+                File.Copy(floppy, Path.Combine(zdir, "disk2.img"), true);
+
+                string archive7z = Path.Combine(pack, "set.7z");
+
+                Check(Run7z(tool, new[] { "a", "-t7z", "-y", archive7z, "disk1.img", "disk2.img" }, zdir),
+                    "pack: 7z archive is created for the test");
+
+                List<string> set7z = ImagePack.UnwrapSet(archive7z);
+
+                Check(set7z.Count == 2 && File.Exists(set7z[0]) && File.Exists(set7z[1]) &&
+                      set7z[0].EndsWith("disk1.img", StringComparison.OrdinalIgnoreCase),
+                    "pack: 7z set is unwrapped via 7-Zip");
+            }
+        }
+
+        /// <summary>Гоняет 7z для подготовки тестового архива.</summary>
+        private static bool Run7z(string tool, string[] arguments, string workDir)
+        {
+            try
+            {
+                System.Diagnostics.ProcessStartInfo info = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = tool,
+                    WorkingDirectory = workDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                foreach (string argument in arguments) info.ArgumentList.Add(argument);
+
+                using (System.Diagnostics.Process process = System.Diagnostics.Process.Start(info))
+                {
+                    process.StandardOutput.ReadToEnd();
+                    process.StandardError.ReadToEnd();
+                    process.WaitForExit(60000);
+
+                    return process.ExitCode <= 1;
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static void TestShare(string dir)

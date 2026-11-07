@@ -16,6 +16,19 @@
     { "download": 3689, "id": "pcdos610", "name": "IBM PC DOS 6.10 (4 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "PC DOS 6.10, английский. Дискета 1 рисует заставку установщика." },
     { "download": 3991, "id": "pcdos630", "name": "IBM PC DOS 6.30 (5 дискет)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "PC DOS 6.30, английский. Загружается в «PC DOS 6.3 Setup»." },
     { "download": 13036, "id": "concurrentdos", "name": "Concurrent DOS 2.0 (2 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "Concurrent DOS 2.0 (Digital Research), английский. Многозадачная DOS, дискета 1 рисует своё меню." },
-    { "download": 12858, "id": "pcmos102", "name": "PC-MOS/386 1.02 (2 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "PC-MOS/386 1.02 - многопользовательская DOS для 386, английский. Дискета 1 рисует заставку установщика." }
+    { "download": 12858, "id": "pcmos102", "name": "PC-MOS/386 1.02 (2 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "PC-MOS/386 1.02 - многопользовательская DOS для 386, английский. Дискета 1 рисует заставку установщика." },
+
+    { "download": 19362, "id": "pcdos200", "name": "IBM PC DOS 2.00 (2 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 32, "note": "PC DOS 2.00 (1983) на дискетах 180K: первая DOS с подкаталогами и жёсткими дисками. Дискета 1 грузится до приглашения даты." },
+    { "download": 19363, "id": "pcdos210", "name": "IBM PC DOS 2.10 (2 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 32, "note": "PC DOS 2.10 (1983) на дискетах 180K: полужёсткие диски и национальные раскладки." },
+    { "download": 19364, "id": "pcdos300", "name": "IBM PC DOS 3.00 (2 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 32, "note": "PC DOS 3.00 (1984) на дискетах 360K - первый PC DOS для IBM PC/AT." },
+    { "download": 19366, "id": "pcdos320", "name": "IBM PC DOS 3.20 (2 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 32, "note": "PC DOS 3.20 (1986) на дискетах 360K: 3.5-дюймовые дискеты и XT-286." },
+    { "download": 19370, "id": "pcdos500", "name": "IBM PC DOS 5.00 (3 дискеты 720K)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "PC DOS 5.00 на трёх дискетах 720K: дискета 1 печатает «IBM DOS Version 5.00»." },
+    { "download": 19235, "id": "concurrentdosxm", "name": "Concurrent DOS XM 6.0 (2 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "Concurrent DOS XM 6.0 (Digital Research) на дискетах 720K: многозадачная DOS, меню установщика." },
+    { "download": 19349, "id": "drdos800", "name": "DR-DOS 8.0 (3 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "DR-DOS 8.0 (DeviceLogics, 2004) на дискетах 1.44M: дискета 1 - установщик с разметкой диска." },
+    { "download": 19378, "id": "pcmos300", "name": "PC-MOS/386 3.0 (дискета)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "PC-MOS/386 3.0 - многопользовательская DOS для 386; грузится с одной дискеты 1.44M." },
+    { "download": 39045, "id": "pcmos102d", "name": "PC-MOS/386 1.02D Demo (360K)", "kind": "fda", "memory_mb": 32, "disk_mb": 0, "note": "Демонстрационная дискета PC-MOS/386 1.02D (1988), 360K: грузится в меню системы." },
+    { "download": 10974, "id": "debian093", "name": "Debian GNU/Linux 0.93 (загрузочные дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 0, "note": "Debian 0.93r6 (1995): boot и root дискеты, печатают «Welcome to Debian GNU/Linux 0.93 Release 6!»." },
+    { "download": 37210, "id": "msdos500single", "name": "MS-DOS 5.0 Single Disk (1.44M)", "kind": "fda", "memory_mb": 32, "disk_mb": 0, "note": "Однодискетная редакция MS-DOS 5.0: грузится до «Microsoft(R) MS-DOS(R) Version 5.00»." },
+    { "download": 18355, "id": "ptsds65cd", "name": "PTS-DOS 6.5 CD (ISO)", "kind": "cdrom", "memory_mb": 32, "disk_mb": 64, "note": "Загрузочный CD PTS-DOS 6.5 (Paragon Technology Systems, 1994): на экране меню установщика." }
   ]
 }
