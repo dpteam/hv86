@@ -306,14 +306,7 @@
           <div>
             <label data-i18n="set.textFont">Text mode font</label>
             <select id="hostTextFont">
-              <option value="">monospace (built-in)</option>
-              <option value="Consolas">Consolas</option>
-              <option value="Cascadia Mono">Cascadia Mono</option>
-              <option value="Lucida Console">Lucida Console</option>
-              <option value="Courier New">Courier New</option>
-              <option value="MS Gothic">MS Gothic</option>
-              <option value="SimSun">SimSun</option>
-              <option value="Terminal">Terminal</option>
+              <option value="" data-i18n="font.builtin">monospace (built-in)</option>
             </select>
           </div>
           <div>
@@ -322,6 +315,12 @@
           </div>
         </div>
         <div class="hint" data-i18n="host.textHint">Default for all VMs. A VM can override it in its own settings. Applied on the next console start.</div>
+
+        <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap">
+          <button class="btn" data-act="font.import" data-i18n="font.import">Load a font file…</button>
+          <span class="hint" id="fontCustomHint" style="margin:0"></span>
+        </div>
+        <div id="fontCustomList" class="font-list"></div>
       </div>
 
       <div class="field">
@@ -333,6 +332,10 @@
           <option value="ctrlalt">Ctrl + Alt</option>
         </select>
         <div class="hint" data-i18n="host.captureHint">Capture is started by the button in the console toolbar; this only chooses how to let go.</div>
+        <label style="display:flex; gap:8px; align-items:center; margin-top:8px">
+          <input type="checkbox" id="hostCaptureClick">
+          <span data-i18n="host.captureClick">Capture the mouse when I click the screen</span>
+        </label>
       </div>
 
       <div class="field">
@@ -387,14 +390,7 @@
           <div>
             <label data-i18n="set.textFont">Text mode font</label>
             <select id="setTextFont">
-              <option value="" data-i18n="set.fontDefault">— as on host —</option>
-              <option value="Consolas">Consolas</option>
-              <option value="Cascadia Mono">Cascadia Mono</option>
-              <option value="Lucida Console">Lucida Console</option>
-              <option value="Courier New">Courier New</option>
-              <option value="MS Gothic">MS Gothic</option>
-              <option value="SimSun">SimSun</option>
-              <option value="Terminal">Terminal</option>
+              <option value="" data-i18n="set.fontDefault">- as on host -</option>
             </select>
           </div>
           <div>

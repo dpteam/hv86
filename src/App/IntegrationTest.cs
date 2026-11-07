@@ -234,6 +234,17 @@ namespace Hv86.App
                 else
                     Fail("floppy state did not reach the page: " + Json.Stringify(fontProbe));
 
+                // Текстовый слой: строк должно быть много, и высота слоя не ноль.
+                // Регрессия "одна полоса текста" была из-за line-height: 0 в CSS.
+                int rows = Json.GetInt(fontProbe, "rows", 0);
+                int layerHeight = Json.GetInt(fontProbe, "layerH", 0);
+
+                if (rows >= 20 && layerHeight > 200)
+                    Ok("text screen rows", rows + " rows, layer " + layerHeight + "px");
+                else
+                    Fail("text screen collapsed: rows=" + rows + ", height=" + layerHeight +
+                         " (" + Json.Stringify(fontProbe) + ")");
+
                 // смена дискеты у ВМ без набора - понятный отказ, а не тишина
                 bool floppyRefused = false;
 

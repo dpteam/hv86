@@ -149,6 +149,24 @@ namespace Hv86.VmHost
                     return;
                 }
 
+                // шрифт, загруженный пользователем: страница подключает его как @font-face
+                // (docs/fonts.md). Только имя файла, без путей.
+                if (path.StartsWith("/font/", StringComparison.OrdinalIgnoreCase))
+                {
+                    string name = Uri.UnescapeDataString(path.Substring("/font/".Length));
+
+                    string file = Hv86.Core.FontCatalog.FilePath(name);
+
+                    if (file != null)
+                    {
+                        ServeFile(e, file, "font/ttf");
+                        return;
+                    }
+
+                    e.Response = Text("not found", 404, "Not Found", "text/plain");
+                    return;
+                }
+
                 switch (path)
                 {
                     case "/v86/libv86.js":

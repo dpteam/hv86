@@ -570,6 +570,17 @@ namespace Hv86.VmHost
             config["textFont"] = textFont ?? "";
             config["textSize"] = textSize;
             config["captureRelease"] = HostSettings.CaptureRelease;
+            config["captureOnClick"] = HostSettings.CaptureOnClick;
+
+            // свои шрифты: страница подключит их через @font-face по /font/<файл>
+            List<object> customFonts = new List<object>();
+
+            foreach (Dictionary<string, object> font in FontCatalog.Custom())
+                customFonts.Add(Json.Obj(
+                    "family", Json.GetString(font, "family", ""),
+                    "url", "/font/" + Uri.EscapeDataString(Json.GetString(font, "file", ""))));
+
+            config["customFonts"] = customFonts;
 
             // реплика стартует с загруженным state'ом и НЕ запускает CPU,
             // пока её не повысят

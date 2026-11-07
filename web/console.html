@@ -49,8 +49,12 @@ body.console {
 .floppy-count.flash { color: #dceaff; }
 .con-right { min-width: 220px; text-align: right; color: #7f93ab; font-family: Consolas, monospace; font-size: 11px; }
 .screen-wrap { flex: 1 1 auto; overflow: auto; display: flex; background: #05070b; }
-.screen { background: #000; line-height: 0; margin: auto; }
-.screen canvas { image-rendering: pixelated; }
+
+/* line-height: 0 здесь НЕ ставим: текстовый слой v86 - это <div> с построчным
+   текстом, и он наследует межстрочный интервал. Ноль схлопывал все строки в
+   одну полосу. Для canvas хватает display: block - он убирает зазор снизу. */
+.screen { background: #000; margin: auto; }
+.screen canvas { image-rendering: pixelated; display: block; }
 .screen-wrap { position: relative; }
 .idle {
   position: absolute; inset: 0; display: flex; flex-direction: column;

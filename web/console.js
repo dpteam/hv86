@@ -68,22 +68,47 @@
     // Текстовый режим v86 рисует <div> с построчным текстом: шрифт задаётся
     // CSS, поэтому кастомизация сводится к font-family/size на этом слое.
     // На гостя это не влияет - он про шрифт ничего не знает.
+    //
+    // ВАЖНО: размер и межстрочный интервал ставим ВСЕГДА, даже когда шрифт не
+    // выбран. Иначе слой наследует line-height контейнера, а там 0 - и все
+    // строки схлопываются в одну полосу (это был реальный баг).
+    var textFontDefault = 14;
+    var fontFacesReady = false;
+
+    // Свои шрифты приходят в boot-конфиге как [{family, url}]: подключаем их
+    // через FontFace API - так они сразу доступны и для CSS, и для canvas.
+    async function ensureFontFaces(fonts) {
+        if (fontFacesReady || !fonts || !fonts.length) return;
+        if (!window.FontFace) return;
+
+        fontFacesReady = true;
+
+        for (var i = 0; i < fonts.length; i++) {
+            try {
+                var face = new FontFace(fonts[i].family, "url(" + fonts[i].url + ")");
+                await face.load();
+                document.fonts.add(face);
+
+                post({ action: "log", text: "шрифт подключён: " + fonts[i].family });
+            } catch (e) {
+                post({ action: "log", text: "шрифт " + fonts[i].family + " не загрузился: " + (e && e.message || e) });
+            }
+        }
+    }
+
     function applyTextFont(font, size) {
         var layer = document.querySelector("#screen_container > div");
         if (!layer) return;
 
-        if (font) layer.style.fontFamily = '"' + String(font).replace(/"/g, "") + '", monospace';
-        else layer.style.fontFamily = "";
-
+        var family = String(font || "").replace(/"/g, "").trim();
         var px = Number(size) || 0;
 
-        if (px > 0) {
-            layer.style.fontSize = px + "px";
-            layer.style.lineHeight = px + "px";
-        } else {
-            layer.style.fontSize = "";
-            layer.style.lineHeight = "";
-        }
+        if (px <= 0) px = textFontDefault;
+
+        layer.style.fontFamily = (family.length > 0 ? '"' + family + '", ' : "") + "monospace";
+        layer.style.fontSize = px + "px";
+        layer.style.lineHeight = px + "px";
+        layer.style.whiteSpace = "pre";
 
         // размер ячейки изменился - пересчитываем масштаб
         requestAnimationFrame(function () { measureNative(); applyScale(); });
@@ -202,7 +227,10 @@
 
     // v86 умеет захватывать указатель (pointer lock): только так гость
     // получает относительные движения, не упираясь в края окна. Захват -
-    // по кнопке, выход - настраиваемый (по умолчанию F8+F12, как в 86box).
+    // по кнопке или кликом по экрану (если гость включил мышь), выход -
+    // настраиваемый (по умолчанию F8+F12, как в 86box).
+    var guestMouse = false;
+
     function captureMouse() {
         if (!emu) return;
 
@@ -237,6 +265,30 @@
         byId("foot-right").textContent = next
             ? "mouse captured · release: " + captureHint()
             : "";
+    }
+
+    // Клик по экрану = захват. Это то, чего ждут от консоли: щёлкнул по
+    // гостю - мышь «внутри», а не «есть кнопка где-то в панели».
+    //
+    // Захватываем только если гость действительно включил мышь (драйвер
+    // PS/2 в гостевой ОС): иначе события всё равно никуда не идут, и
+    // захват выглядел бы как «мышь пропала». Про это честно пишем внизу.
+    function bindScreenCapture() {
+        var screen = byId("screen_container");
+        if (!screen) return;
+
+        screen.addEventListener("mousedown", function (event) {
+            if (captured) return;
+            if (event.button !== 0) return;
+            if (config && config.captureOnClick === false) return;
+
+            if (!guestMouse) {
+                byId("foot-right").textContent = "гость не включил мышь: в его ОС нет драйвера мыши";
+                return;
+            }
+
+            captureMouse();
+        }, true);
     }
 
     // какой способ выхода выбран - решает настройка хоста
@@ -414,6 +466,9 @@
 
         hideIdle();
 
+        // свои шрифты (загруженные пользователем) - до применения шрифта
+        try { await ensureFontFaces(c.customFonts); } catch (e) { /* не критично */ }
+
         // шрифт текстового режима: свой у ВМ или хостовый (уже разрешён в C#)
         applyTextFont(c.textFont, c.textSize);
 
@@ -498,7 +553,10 @@
         });
 
         emu.add_listener("mouse-enable", function (enabled) {
-            byId("foot-right").textContent = enabled ? "mouse captured" : "";
+            guestMouse = !!enabled;
+            byId("foot-right").textContent = enabled
+                ? (captured ? "mouse captured · release: " + captureHint() : "гость включил мышь: щёлкните по экрану")
+                : "";
         });
 
         // страховка: если ready не пришёл (например, образ грузится долго),
@@ -906,6 +964,15 @@
                         height: Math.round(rect.height),
                         font: style ? style.fontFamily : "",
                         fontSize: style ? style.fontSize : "",
+                        // диагностика текстового слоя: сколько строк, какая высота,
+                        // не остались ли от v86 жёсткие width/height (docs/screen.md)
+                        rows: layer ? layer.childNodes.length : 0,
+                        layerH: layer ? layer.offsetHeight : 0,
+                        layerStyleH: layer ? (layer.style.height || "") : "",
+                        layerStyleW: layer ? (layer.style.width || "") : "",
+                        layerLine: style ? style.lineHeight : "",
+                        layerTransform: layer ? (layer.style.transform || "") : "",
+                        zoom: cont ? (cont.style.zoom || "") : "",
                         capture: (config && config.captureRelease) || "",
                         floppyCount: floppyCount,
                         floppyIndex: floppyIndex,
@@ -1029,6 +1096,8 @@
             command(this.getAttribute("data-cmd"));
         });
     }
+
+    bindScreenCapture();
 
     post({ action: "ready" });
 })();

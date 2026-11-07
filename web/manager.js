@@ -60,6 +60,7 @@
         vms: [],
         presets: [],
         replicas: [],
+        fonts: null,
         selected: null,
         snapshotsId: null,
         pendingPickTarget: null,
@@ -533,25 +534,89 @@
     function openHostSettings() {
         var settings = state.hostSettings || {};
 
-        var select = byId("hostTextFont");
-        var font = settings.text_font || "";
+        fillFontSelect(byId("hostTextFont"), settings.text_font || "", "font.builtin");
 
-        if (font && !Array.prototype.some.call(select.options, function (o) { return o.value === font; })) {
-            var extra = document.createElement("option");
-            extra.value = font;
-            extra.textContent = font;
-            select.appendChild(extra);
-        }
-
-        select.value = font;
         byId("hostTextSize").value = String(settings.text_font_size || 0);
         byId("hostCapture").value = settings.capture_release || "f8f12";
+        byId("hostCaptureClick").checked = settings.capture_on_click !== false;
         byId("hostReplicaPort").value = String(settings.replica_port || 0);
         byId("hostReplicaToken").value = settings.replica_token || "";
         byId("hostWitnessUrl").value = settings.witness_url || "";
         byId("hostWitnessToken").value = settings.witness_token || "";
 
+        renderCustomFonts();
+        post({ action: "host.fonts" });
+
         openModal("hostSettingsModal");
+    }
+
+    /// Список шрифтов: системные + загруженные. Строится из host.fonts,
+    /// а не из жёстко вписанных пяти имён.
+    function fillFontSelect(select, current, emptyLabel) {
+        if (!select) return;
+
+        var fonts = state.fonts || { all: [] };
+        var empty = select.querySelector("option[value='']");
+
+        select.innerHTML = "";
+
+        var blank = document.createElement("option");
+        blank.value = "";
+        blank.textContent = T(emptyLabel || "font.builtin");
+        select.appendChild(blank);
+
+        var list = fonts.all || [];
+
+        for (var i = 0; i < list.length; i++) {
+            var option = document.createElement("option");
+            option.value = list[i];
+            option.textContent = list[i];
+            select.appendChild(option);
+        }
+
+        // выбранного может уже не быть в системе - показываем как есть
+        if (current && !Array.prototype.some.call(select.options, function (o) { return o.value === current; })) {
+            var extra = document.createElement("option");
+            extra.value = current;
+            extra.textContent = current;
+            select.appendChild(extra);
+        }
+
+        select.value = current || "";
+    }
+
+    function renderCustomFonts() {
+        var list = byId("fontCustomList");
+        var hint = byId("fontCustomHint");
+
+        if (!list) return;
+
+        list.innerHTML = "";
+
+        var custom = (state.fonts && state.fonts.custom) || [];
+
+        if (hint) hint.textContent = custom.length > 0 ? T("font.customCount").replace("{n}", custom.length) : "";
+
+        custom.forEach(function (font) {
+            var row = document.createElement("div");
+            row.className = "font-row";
+
+            var name = document.createElement("span");
+            name.className = "mono";
+            name.textContent = font.family;
+
+            var remove = document.createElement("button");
+            remove.className = "btn danger";
+            remove.textContent = "✕";
+            remove.title = T("font.remove");
+            remove.addEventListener("click", function () {
+                post({ action: "host.fonts.remove", file: font.file });
+            });
+
+            row.appendChild(name);
+            row.appendChild(remove);
+            list.appendChild(row);
+        });
     }
 
     function saveHostSettings() {
@@ -560,6 +625,7 @@
             text_font: byId("hostTextFont").value,
             text_font_size: Math.max(0, Number(byId("hostTextSize").value) || 0),
             capture_release: byId("hostCapture").value,
+            capture_on_click: byId("hostCaptureClick").checked,
             replica_port: Math.max(0, Math.min(65535, Number(byId("hostReplicaPort").value) || 0)),
             replica_token: byId("hostReplicaToken").value,
             witness_url: byId("hostWitnessUrl").value.trim(),
@@ -600,17 +666,8 @@
         byId("setRestore").checked = vm.restore_on_crash !== false;
 
         // шрифт текстового режима: пусто/0 - как в настройках хоста
-        var fontSelect = byId("setTextFont");
-        var font = vm.text_font || "";
+        fillFontSelect(byId("setTextFont"), vm.text_font || "", "set.fontDefault");
 
-        if (font && !Array.prototype.some.call(fontSelect.options, function (o) { return o.value === font; })) {
-            var extra = document.createElement("option");
-            extra.value = font;
-            extra.textContent = font;
-            fontSelect.appendChild(extra);
-        }
-
-        fontSelect.value = font;
         byId("setTextSize").value = String(vm.text_font_size || 0);
 
         state.fwdDraft = (vm.forwards || []).slice();
@@ -832,6 +889,10 @@
                 toast(T("diag.collecting"), "info");
                 return;
 
+            case "font.import":
+                post({ action: "host.fonts.pick" });
+                return;
+
             case "vm.snapshot":
                 ask({
                     title: T("snap.askTitle"),
@@ -944,6 +1005,31 @@
         }
     });
 
+    // Двойной клик по ВМ = подключиться к ней (как в Hyper-V). Обработчик на
+    // document, потому что строки таблицы и дерева перерисовываются.
+    document.addEventListener("dblclick", function (event) {
+        var target = event.target;
+
+        while (target && target !== document && !target.getAttribute) target = target.parentNode;
+
+        // не мешаем кнопкам и полям внутри строки
+        if (target && target.closest && target.closest("button, input, select, a")) return;
+
+        var holder = target;
+
+        while (holder && holder !== document) {
+            var vmId = holder.getAttribute && holder.getAttribute("data-id");
+            if (vmId) {
+                event.preventDefault();
+                select(vmId);
+                post({ action: "vm.console", id: vmId });
+                return;
+            }
+
+            holder = holder.parentNode;
+        }
+    });
+
     byId("newPreset").addEventListener("change", applyPreset);
     byId("newSource").addEventListener("change", function () { fillPresets(); applyPreset(); });
     byId("setNetMode").addEventListener("change", renderForwards);
@@ -986,6 +1072,7 @@
                 state.vms = message.vms || [];
                 state.presets = message.presets || [];
                 state.replicas = message.replicas || [];
+                state.fonts = message.fonts || state.fonts;
                 state.version = message.version || "";
                 state.v86 = message.v86 || "";
                 state.data_dir = message.data_dir || "";
@@ -1022,6 +1109,13 @@
             case "picked":
                 if (state.pendingPickTarget && message.path) byId(state.pendingPickTarget).value = message.path;
                 state.pendingPickTarget = null;
+                break;
+
+            case "fonts":
+                state.fonts = message.fonts || null;
+                fillFontSelect(byId("hostTextFont"), byId("hostTextFont").value, "font.builtin");
+                fillFontSelect(byId("setTextFont"), byId("setTextFont").value, "set.fontDefault");
+                renderCustomFonts();
                 break;
         }
     });

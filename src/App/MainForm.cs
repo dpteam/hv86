@@ -47,6 +47,12 @@ namespace Hv86.App
         private bool _pageReady;
         private bool _reallyClosing;
 
+        /// <summary>
+        /// Последнее известное число работающих ВМ. Обновляется в PushState,
+        /// чтобы обработчик закрытия не ходил в службу из UI-потока.
+        /// </summary>
+        private volatile int _vmsRunning;
+
         public MainForm()
         {
             Text = AppInfo.ProductName + " " + AppInfo.Version;
@@ -257,6 +263,7 @@ namespace Hv86.App
             {
                 _pageReady = true;
                 PushState();
+                _ = SendFontsAsync();
             });
 
             _bridge.Register("refresh", delegate { PushState(); });
@@ -533,6 +540,35 @@ namespace Hv86.App
                 await PushStateAsync();
             });
 
+            _bridge.Register("host.fonts.pick", delegate
+            {
+                string path = AskFile("Load a font for the text mode",
+                    "Fonts (*.ttf;*.otf;*.ttc)|*.ttf;*.otf;*.ttc|All files (*.*)|*.*");
+
+                if (string.IsNullOrEmpty(path)) return;
+
+                Task.Run(async delegate
+                {
+                    try
+                    {
+                        await CallService("host.fonts.import", Json.Obj("path", path), 30000);
+                        await SendFontsAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        _bridge.Send(WebBridge.Msg("error", "message", ex.Message));
+                    }
+                });
+            });
+
+            _bridge.Register("host.fonts.remove", async message =>
+            {
+                await CallService("host.fonts.remove", Json.Obj(
+                    "file", Json.GetString(message, "file", "")), 15000);
+
+                await SendFontsAsync();
+            });
+
             _bridge.Register("host.diagnostics", async delegate
             {
                 object result = await CallService("host.diagnostics", null, 300000);
@@ -722,12 +758,39 @@ namespace Hv86.App
                 catch { }
             }
 
+            // кэш для обработчика закрытия: там нельзя ждать службу
+            Dictionary<string, object> statusView = host as Dictionary<string, object>;
+            _vmsRunning = statusView == null ? 0 : Json.GetInt(statusView, "vms_running", 0);
+
             payload["host"] = host;
             payload["vms"] = vms ?? new List<object>();
             payload["presets"] = presets ?? new List<object>();
             payload["replicas"] = replicas ?? new List<object>();
 
             _bridge.Send(payload);
+        }
+
+        /// <summary>Отправляет странице список шрифтов (системные + загруженные).</summary>
+        private async Task SendFontsAsync()
+        {
+            object fonts = null;
+
+            try
+            {
+                fonts = await CallService("host.fonts", null, 15000).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("FONT", "список шрифтов: " + ex.Message);
+
+                // без службы показываем хотя бы системные
+                fonts = Json.Obj(
+                    "system", FontCatalog.SystemFonts(),
+                    "custom", FontCatalog.Custom(),
+                    "all", FontCatalog.All());
+            }
+
+            _bridge.Send(WebBridge.Msg("fonts", "fonts", fonts));
         }
 
         /// <summary>Пресеты без службы: их каталог вшит в exe.</summary>
@@ -953,16 +1016,35 @@ namespace Hv86.App
         {
             if (_reallyClosing) return;
 
-            // Крестик теперь закрывает приложение, а не прячет окно в трей:
-            // раньше первый клик прятал окно, и это выглядело как "надо
-            // закрывать дважды". Свернуть в трей - отдельный пункт меню.
-            if (e.CloseReason == CloseReason.UserClosing && _engine != null && RunningVms() > 0)
+            // Крестик закрывает приложение. Подтверждение нужно только в
+            // портативном режиме (движок живёт в этом процессе) и только если
+            // ВМ реально работают.
+            //
+            // Раньше здесь был синхронный запрос к службе прямо в UI-потоке
+            // (connect до 700 мс + запрос до 2 с). Если служба была занята,
+            // окно на это время замирало, а вопрос всплывал уже после второго
+            // клика - со стороны это выглядело как «не закрывается». Теперь
+            // берём последнее известное значение из PushState: закрытие не
+            // ждёт сеть вообще.
+            int running = _vmsRunning;
+            bool portable = _engine != null;
+
+            Log.Info("UI", "закрытие окна: портативный=" + portable + ", ВМ работает=" + running +
+                           ", причина=" + e.CloseReason);
+
+            if (e.CloseReason == CloseReason.UserClosing && portable && running > 0)
             {
+                // окно могло быть позади других - поднимаем, иначе вопрос
+                // останется незамеченным
+                try { Activate(); BringToFront(); } catch { }
+
                 DialogResult answer = MessageBox.Show(this,
                     "ВМ работают внутри этого окна (портативный режим без службы).\r\n" +
                     "Закрыть hv86 и остановить их? Диски сохранятся.",
                     AppInfo.ProductName, MessageBoxButtons.OKCancel, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2);
+
+                Log.Info("UI", "подтверждение закрытия: " + answer);
 
                 if (answer != DialogResult.OK)
                 {
@@ -974,20 +1056,13 @@ namespace Hv86.App
             _reallyClosing = true;
         }
 
-        /// <summary>Сколько ВМ реально работает (для подтверждения выхода).</summary>
-        private int RunningVms()
+        /// <summary>
+        /// Сколько ВМ работает, по последнему ответу службы. Никаких запросов:
+        /// вызывается из обработчика закрытия, где блокировать UI нельзя.
+        /// </summary>
+        public int RunningVms()
         {
-            try
-            {
-                Dictionary<string, object> status = CallService("host.status", null, 2000)
-                    .GetAwaiter().GetResult() as Dictionary<string, object>;
-
-                return Json.GetInt(status, "vms_running", 0);
-            }
-            catch
-            {
-                return 0;
-            }
+            return _vmsRunning;
         }
 
         public void CloseForReal()

@@ -536,8 +536,10 @@ namespace Hv86.App
         }
 
         /// <summary>
-        /// Текст с экрана headless-ВМ: единственный способ увидеть гостя из
-        /// консоли (у web-движка экран рисует WebView2, там `vm.screen` нет).
+        /// Текст с экрана: у headless-движка это `vm.screen`, у web-движка
+        /// экран рисует WebView2. Для web печатаем диагностику страницы
+        /// (строки, высота слоя, масштаб) — с неё начинается разбор
+        /// «экран показывает не то» (docs/screen.md).
         /// </summary>
         private static int ScreenText(PipeClient client, List<string> positional, bool json)
         {
@@ -550,10 +552,39 @@ namespace Hv86.App
 
             if (pipe.Length == 0) throw new Hv86Exception("ВМ не запущена: экрана нет");
 
+            bool headless = Json.GetString(view, "engine", "web") == "headless";
+
             using (PipeClient vm = new PipeClient(pipe))
             {
                 if (!vm.ConnectAsync(5000).GetAwaiter().GetResult())
                     throw new Hv86Exception("движок ВМ не отвечает");
+
+                if (!headless)
+                {
+                    Dictionary<string, object> probe = vm.CallForResultAsync("vm.debug.scale",
+                        Json.Obj("mode", "1"), 20000).GetAwaiter().GetResult() as Dictionary<string, object>;
+
+                    if (json)
+                    {
+                        Console.WriteLine(Json.Pretty(probe));
+                        return 0;
+                    }
+
+                    Console.WriteLine("web-движок: экран в WebView2, текста из консоли не видно");
+                    Console.WriteLine("  строк в текстовом слое: " + Json.GetInt(probe, "rows", 0));
+                    Console.WriteLine("  высота слоя: " + Json.GetInt(probe, "layerH", 0) + " px" +
+                                      (Json.GetString(probe, "layerStyleH", "").Length > 0
+                                          ? " (жёстко задана: " + Json.GetString(probe, "layerStyleH", "") + ")"
+                                          : ""));
+                    Console.WriteLine("  высота контейнера: " + Json.GetInt(probe, "height", 0) + " px, масштаб " +
+                                      Json.Stringify(probe.ContainsKey("scale") ? probe["scale"] : 1) +
+                                      ", zoom " + Json.GetString(probe, "zoom", "1"));
+                    Console.WriteLine("  шрифт: " + Json.GetString(probe, "font", "") + " " +
+                                      Json.GetString(probe, "fontSize", "") +
+                                      ", межстрочный: " + Json.GetString(probe, "layerLine", ""));
+
+                    return 0;
+                }
 
                 Dictionary<string, object> screen = vm.CallForResultAsync("vm.screen", null, 15000)
                     .GetAwaiter().GetResult() as Dictionary<string, object>;
@@ -568,7 +599,7 @@ namespace Hv86.App
 
                 if (lines == null)
                 {
-                    Console.WriteLine("(экран недоступен: vm.screen есть только у headless-движка)");
+                    Console.WriteLine("(экран недоступен)");
                     return 0;
                 }
 

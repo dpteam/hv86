@@ -148,6 +148,16 @@ button, input, select {
 .replica-banner.hidden { display: none; }
 .replica-banner .mono { font-family: Consolas, monospace; font-size: 11px; color: #9fb894; }
 
+/* загруженные шрифты в настройках хоста */
+.font-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.font-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 8px; border: 1px solid var(--line-2); border-radius: 6px;
+  background: var(--bg-3); font-size: 12px;
+}
+.font-row .mono { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.font-row .btn { padding: 2px 8px; }
+
 .table-wrap { flex: 1 1 auto; overflow: auto; }
 
 table.vm {

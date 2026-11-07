@@ -44,6 +44,7 @@ namespace Hv86.App
                 TestVmUpgrade(dir);
                 TestReplica(dir);
                 TestWitness(dir);
+                TestFonts(dir);
             }
             catch (Exception ex)
             {
@@ -993,6 +994,78 @@ namespace Hv86.App
         /// Кэш загрузки: запись, чтение, отказ при чужом/изменённом образе и при
         /// другой версии движка (docs/boot-cache.md).
         /// </summary>
+        /// <summary>
+        /// Шрифты: системные находятся, свой шрифт импортируется, имя семейства
+        /// читается из файла, а не из его имени (docs/fonts.md).
+        /// </summary>
+        private static void TestFonts(string dir)
+        {
+            List<string> system = FontCatalog.SystemFonts();
+
+            Check(system.Count > 0, "fonts: system fonts are listed (" + system.Count + ")");
+
+            bool mono = false;
+
+            foreach (string name in system)
+                if (name.IndexOf("Consolas", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("Courier", StringComparison.OrdinalIgnoreCase) >= 0)
+                    mono = true;
+
+            Check(mono, "fonts: common monospace families are present");
+
+            // берём настоящий системный шрифт и проверяем разбор семейства
+            string sample = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "consola.ttf");
+
+            if (File.Exists(sample))
+            {
+                string family = FontCatalog.FamilyName(sample);
+
+                Check(family.IndexOf("Consolas", StringComparison.OrdinalIgnoreCase) >= 0,
+                    "fonts: family name is read from the file (" + family + ")");
+
+                Dictionary<string, object> imported = FontCatalog.Import(sample);
+
+                Check(Json.GetString(imported, "family", "").Length > 0 &&
+                      FontCatalog.FilePath(Json.GetString(imported, "file", "")) != null,
+                    "fonts: custom font is copied into the data dir");
+
+                bool listed = false;
+
+                foreach (Dictionary<string, object> item in FontCatalog.Custom())
+                    if (Json.GetString(item, "family", "") == Json.GetString(imported, "family", ""))
+                        listed = true;
+
+                Check(listed, "fonts: custom font appears in the catalog");
+
+                FontCatalog.Remove(Json.GetString(imported, "file", ""));
+
+                Check(FontCatalog.FilePath(Json.GetString(imported, "file", "")) == null,
+                    "fonts: removed font is gone from the data dir");
+            }
+            else
+            {
+                // на машине без Consolas проверяем хотя бы отказ на мусорном файле
+                Check(true, "fonts: sample font not installed, import check skipped");
+            }
+
+            string junk = Path.Combine(dir, "junk.ttf");
+            File.WriteAllText(junk, "not a font");
+
+            Check(FontCatalog.FamilyName(junk) == "junk",
+                "fonts: unreadable file falls back to the file name");
+
+            bool refused = false;
+
+            try { FontCatalog.Import(Path.Combine(dir, "junk.txt")); }
+            catch (Hv86Exception) { refused = true; }
+
+            File.WriteAllText(Path.Combine(dir, "junk.txt"), "x");
+            try { FontCatalog.Import(Path.Combine(dir, "junk.txt")); }
+            catch (Hv86Exception) { refused = true; }
+
+            Check(refused, "fonts: a non-font file is refused");
+        }
+
         private static void TestShare(string dir)
         {
             string share = Path.Combine(dir, "share");

@@ -269,6 +269,20 @@ namespace Hv86.App
                     return view;
                 }
 
+                // шрифты текстового режима: системные + загруженные пользователем
+                case "host.fonts":
+                    return Json.Obj(
+                        "system", FontCatalog.SystemFonts(),
+                        "custom", FontCatalog.Custom(),
+                        "all", FontCatalog.All());
+
+                case "host.fonts.import":
+                    return FontCatalog.Import(Json.GetString(parameters, "path", ""));
+
+                case "host.fonts.remove":
+                    FontCatalog.Remove(Json.GetString(parameters, "file", ""));
+                    return Json.Obj("ok", true);
+
                 // локальные реплики, принятые этим хостом
                 case "host.replicas":
                     return _manager.LocalReplicas();

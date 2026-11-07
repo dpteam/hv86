@@ -86,6 +86,63 @@ namespace Hv86.Core
             set { Set("witness_token", value ?? ""); }
         }
 
+        /// <summary>
+        /// Захватывать мышь кликом по экрану консоли (не только кнопкой).
+        /// Работает, когда гостевой драйвер включил мышь.
+        /// </summary>
+        public static bool CaptureOnClick
+        {
+            get { return !"false".Equals(Get("capture_on_click", "true") as string, StringComparison.OrdinalIgnoreCase); }
+            set { Set("capture_on_click", value ? "true" : "false"); }
+        }
+
+        /// <summary>
+        /// Загруженные пользователем шрифты: [{family, file}]. Файлы лежат в
+        /// %HV86_ROOT%\fonts, здесь только описание.
+        /// </summary>
+        public static List<Dictionary<string, object>> Fonts()
+        {
+            List<Dictionary<string, object>> list = new List<Dictionary<string, object>>();
+
+            lock (Gate)
+            {
+                object raw;
+
+                if (!Load().TryGetValue("fonts", out raw) || raw == null) return list;
+
+                List<object> items = raw as List<object>;
+
+                if (items == null) return list;
+
+                foreach (object item in items)
+                {
+                    Dictionary<string, object> entry = item as Dictionary<string, object>;
+                    if (entry == null) continue;
+
+                    string file = Json.GetString(entry, "file", "");
+                    string family = Json.GetString(entry, "family", "");
+
+                    if (file.Length == 0 || family.Length == 0) continue;
+
+                    list.Add(Json.Obj("family", family, "file", file));
+                }
+            }
+
+            return list;
+        }
+
+        public static void Fonts(List<Dictionary<string, object>> list)
+        {
+            List<object> items = new List<object>();
+
+            foreach (Dictionary<string, object> item in list ?? new List<Dictionary<string, object>>())
+                items.Add(Json.Obj(
+                    "family", Json.GetString(item, "family", ""),
+                    "file", Json.GetString(item, "file", "")));
+
+            Set("fonts", items);
+        }
+
         // ------------------------------------------------------------- хранение
 
         private static readonly object Gate = new object();
@@ -159,7 +216,9 @@ namespace Hv86.Core
                 "replica_port", ReplicaPort,
                 "replica_token", ReplicaToken,
                 "witness_url", WitnessUrl,
-                "witness_token", WitnessToken);
+                "witness_token", WitnessToken,
+                "capture_on_click", CaptureOnClick,
+                "fonts", Fonts());
         }
 
         public static Dictionary<string, object> Apply(Dictionary<string, object> parameters)
@@ -185,6 +244,9 @@ namespace Hv86.Core
 
                 if (parameters.ContainsKey("witness_token"))
                     WitnessToken = Json.GetString(parameters, "witness_token", "");
+
+                if (parameters.ContainsKey("capture_on_click"))
+                    CaptureOnClick = Json.GetBool(parameters, "capture_on_click", true);
             }
 
             return View();
