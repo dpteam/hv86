@@ -110,12 +110,13 @@ jobs:
               "``````" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
               # временно: лог падения в отдельную ветку, чтобы его можно было
-              # прочитать снаружи (логи шага требуют авторизации)
+              # прочитать снаружи (логи шага требуют авторизации).
+              # -f обязателен: *.log в .gitignore
               git config user.email 'ci@hv86.local'
               git config user.name 'hv86 ci'
-              git checkout -b ci-log
-              Copy-Item unit.log ci-unit.log
-              git add ci-unit.log
+              git checkout -B ci-log
+              Copy-Item unit.log ci-unit.log -Force
+              git add -f ci-unit.log
               git commit -q -m "ci: unit log"
               git push -f origin ci-log
           }
