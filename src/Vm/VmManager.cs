@@ -398,6 +398,11 @@ namespace Hv86.Vm
                     throw new Hv86Exception("у ВМ нет ни диска, ни образа для загрузки");
                 }
 
+                if (preset != null)
+                {
+                    vm.PresetId = presetId;
+                }
+
                 VmStore.Save(vm);
 
                 lock (_gate)
@@ -490,6 +495,7 @@ namespace Hv86.Vm
                 restorePath = null;
             }
 
+            // state-файл для восстановления не найден - обычный запуск
             runtime.Def.State = "starting";
             runtime.Def.LastError = "";
             runtime.StartedUtc = DateTime.UtcNow;

@@ -35,6 +35,9 @@ namespace Hv86.VmHost
         private readonly string _vmId;
         private readonly bool _showConsole;
         private readonly string _restorePath;
+
+        /// <summary>Когда странице отдан boot-конфиг: от этого считаем время до работы гостя.</summary>
+        private DateTime _bootRequestUtc;
         private readonly bool _smoke;
         private readonly bool _replica;
         private readonly int _replicaRelayPort;
@@ -264,8 +267,24 @@ namespace Hv86.VmHost
                     break;
 
                 case "metrics":
+                {
+                    long before = _instructions;
+
                     _instructions = Json.GetLong(message, "instructions", _instructions);
                     _mips = Json.GetInt(message, "mips", _mips);
+
+                    // сколько времени прошло от «страница получила boot-конфиг»
+                    // до первых инструкций гостя: быстрый старт видно по числу
+                    if (before == 0 && _instructions > 0)
+                    {
+                        DateTime started = _bootRequestUtc;
+
+                        long ms = started == default(DateTime)
+                            ? 0
+                            : (long)(DateTime.UtcNow - started).TotalMilliseconds;
+
+                        Log.Info("BOOT", "первые инструкции гостя через " + ms + " мс");
+                    }
 
                     Broadcast("vm.metrics", Json.Obj(
                         "id", _vmId,
@@ -275,6 +294,7 @@ namespace Hv86.VmHost
                         "relay_clients", _relay == null ? 0 : _relay.Handshakes,
                         "state", _state));
                     break;
+                }
 
                 case "error":
                     _error = Json.GetString(message, "message", "");
@@ -360,6 +380,8 @@ namespace Hv86.VmHost
 
         private void SendBoot()
         {
+            _bootRequestUtc = DateTime.UtcNow;
+
             Log.Info("VMHOST", "запуск эмулятора");
             _form.Post(Json.Obj("action", "boot", "config", _bootConfig));
         }

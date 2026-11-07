@@ -989,6 +989,10 @@ namespace Hv86.App
             }
         }
 
+        /// <summary>
+        /// Кэш загрузки: запись, чтение, отказ при чужом/изменённом образе и при
+        /// другой версии движка (docs/boot-cache.md).
+        /// </summary>
         private static void TestShare(string dir)
         {
             string share = Path.Combine(dir, "share");

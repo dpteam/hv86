@@ -108,6 +108,12 @@ namespace Hv86.Vm
         public string LastError = "";
         public string CreatedUtc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
         public string V86Version = AppInfo.V86Version;
+
+        /// <summary>
+        /// Из какого пресета создана ВМ (пусто - свой ISO/диск). Нужно, чтобы
+        /// понимать происхождение ВМ; на запуск не влияет.
+        /// </summary>
+        public string PresetId = "";
         public string Notes = "";
 
         public string HdaPath { get { return Paths.Absolute(Id, HdaFile); } }
@@ -219,6 +225,7 @@ namespace Hv86.Vm
                 "last_error", LastError,
                 "created_utc", CreatedUtc,
                 "v86_version", V86Version,
+                "preset", PresetId ?? "",
                 "notes", Notes);
         }
 
@@ -328,6 +335,7 @@ namespace Hv86.Vm
             vm.LastError = Json.GetString(map, "last_error", "");
             vm.CreatedUtc = Json.GetString(map, "created_utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture));
             vm.V86Version = Json.GetString(map, "v86_version", AppInfo.V86Version);
+            vm.PresetId = Json.GetString(map, "preset", "");
             vm.Notes = Json.GetString(map, "notes", "");
 
             return vm;
@@ -370,7 +378,8 @@ namespace Hv86.Vm
                 "restarts", Restarts,
                 "last_error", LastError,
                 "created_utc", CreatedUtc,
-                "v86_version", V86Version);
+                "v86_version", V86Version,
+                "preset", PresetId);
         }
 
         private static string DescribeMedia(string relative)
