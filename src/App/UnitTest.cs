@@ -770,8 +770,10 @@ namespace Hv86.App
             Check(Json.GetInt(promoted, "relay_port", 0) == 4242,
                 "replica: relay port travels with the state");
 
-            Check(!Directory.Exists(solo.Dir("abcd1234")),
-                "replica: staged copy is gone after promotion");
+            string stagedDir = solo.Dir("abcd1234");
+
+            Check(!Directory.Exists(stagedDir),
+                "replica: staged copy is gone after promotion (" + stagedDir + ")");
 
             // чужая версия движка - поднимать нельзя, state не подойдёт
             VmDefinition foreign = new VmDefinition();
