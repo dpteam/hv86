@@ -99,8 +99,17 @@ jobs:
         shell: powershell
         run: |
           $env:HV86_ROOT = Join-Path $env:RUNNER_TEMP 'hv86-unit'
-          dotnet .\bin\hv86.dll --unit
-          exit $LastExitCode
+          dotnet .\bin\hv86.dll --unit *>&1 | Tee-Object -FilePath unit.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+              # логи шага приватны, а summary виден: без этого падение в CI
+              # приходится разгадывать вслепую
+              "### --unit failed (exit $code)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "``````" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              Get-Content unit.log -Tail 60 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "``````" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
+          exit $code
 
       - name: Self-test (resources, WebView2 runtime, presets)
         shell: powershell
