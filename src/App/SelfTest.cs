@@ -65,6 +65,13 @@ namespace Hv86.App
 
             Check(v86Total > 2 * 1024 * 1024, "v86 assets total", v86Total + " bytes");
 
+            // ---- ассеты против манифеста: версия, размеры, SHA-256.
+            // Проверка ловит сборку, где файл заменили, а версию/хэши забыли.
+            foreach (Dictionary<string, object> item in V86Assets.VerifyEmbedded())
+                Check(Json.GetBool(item, "ok", false),
+                    "v86 " + Json.GetString(item, "what", "?"),
+                    Json.GetString(item, "detail", ""));
+
             // ---- пресеты
             List<Dictionary<string, object>> presets = PresetCatalog.All();
             Check(presets.Count > 0, "preset catalog", presets.Count + " entries");

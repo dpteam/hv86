@@ -111,6 +111,7 @@ hv86 --cli snapshots dev
 hv86 --cli revert dev 0001-before-update
 hv86 --cli type dev "dir" --enter
 hv86 --cli floppy dev next     :: следующая дискета комплекта
+hv86 --cli migrate dev         :: перенести ВМ на встроенный v86 (после обновления)
 hv86 --cli screen dev            :: текст с экрана (только headless-движок)
 hv86 --cli stop dev
 hv86 --cli export dev D:\backup\dev.hv86x

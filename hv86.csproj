@@ -119,6 +119,9 @@
     <EmbeddedResource Include="assets\v86\0.5.473\vgabios.bin">
       <LogicalName>Hv86.Assets.v86.vgabios.bin</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="assets\v86\manifest.json">
+      <LogicalName>Hv86.Assets.v86.manifest.json</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="assets\presets.json">
       <LogicalName>Hv86.Assets.presets.json</LogicalName>
     </EmbeddedResource>

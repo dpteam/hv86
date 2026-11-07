@@ -41,6 +41,7 @@ namespace Hv86.App
                 TestHostSettings();
                 TestImagePack(dir);
                 TestShare(dir);
+                TestVmUpgrade(dir);
             }
             catch (Exception ex)
             {
@@ -550,6 +551,62 @@ namespace Hv86.App
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Перенос ВМ на другой движок: версия меняется, снапшоты и чекпоинты
+        /// старой версии уходят (state между версиями несовместим).
+        /// </summary>
+        private static void TestVmUpgrade(string dir)
+        {
+            string work = Path.Combine(dir, "upgrade");
+            Directory.CreateDirectory(work);
+
+            VmDefinition vm = new VmDefinition();
+            vm.Id = "upgtest";
+            vm.Name = "upg";
+            vm.MemoryMb = 32;
+
+            Paths.EnsureVmDirectories(vm.Id);
+
+            Check(!VmUpgrade.NeedsMigration(vm), "upgrade: new VM uses the built-in engine");
+
+            string state = Path.Combine(work, "state.bin");
+            File.WriteAllBytes(state, new byte[2 * 1024 * 1024]);
+
+            CheckpointStore.Create(vm, "before-upgrade", state, 1000);
+            Check(CheckpointStore.List(vm.Id).Count == 1, "upgrade: snapshot is created");
+
+            string ringState = Path.Combine(work, "ring.bin");
+            File.WriteAllBytes(ringState, new byte[2 * 1024 * 1024]);
+            CheckpointStore.SaveRing(vm, ringState, 2000);
+
+            // так выглядит ВМ, пережившая обновление приложения
+            vm.V86Version = "0.0.1-old";
+
+            Check(VmUpgrade.NeedsMigration(vm), "upgrade: foreign engine version needs migration");
+
+            string hint = VmUpgrade.Hint(vm);
+            Check(hint.IndexOf("migrate", StringComparison.OrdinalIgnoreCase) >= 0,
+                "upgrade: the hint says how to fix it");
+
+            Dictionary<string, object> plan = VmUpgrade.Plan(vm);
+            Check(Json.GetBool(plan, "needed", false) &&
+                  Json.GetInt(plan, "snapshots", -1) == 1 &&
+                  Json.GetInt(plan, "checkpoints", -1) == 1,
+                "upgrade: plan counts what will be lost");
+
+            Dictionary<string, object> summary = VmUpgrade.Migrate(vm);
+
+            Check(vm.V86Version == AppInfo.V86Version && !VmUpgrade.NeedsMigration(vm),
+                "upgrade: VM moved to the built-in engine");
+            Check(CheckpointStore.List(vm.Id).Count == 0, "upgrade: old snapshots are gone");
+            Check(CheckpointStore.RingCount(vm) == 0, "upgrade: old checkpoints are gone");
+            Check(Json.GetInt(summary, "snapshots", 0) == 1 &&
+                  Json.GetInt(summary, "checkpoints", 0) == 1,
+                "upgrade: summary reports what was removed");
+            Check(vm.State == "stopped" && vm.Restarts == 0 && vm.LastError.Length == 0,
+                "upgrade: VM is left in a clean stopped state");
         }
 
         private static void TestShare(string dir)

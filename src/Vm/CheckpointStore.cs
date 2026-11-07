@@ -78,7 +78,7 @@ namespace Hv86.Vm
                 "kind", KindSnapshot,
                 "created_utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
                 "memory_mb", vm.MemoryMb,
-                "v86_version", AppInfo.V86Version,
+                "v86_version", vm.V86Version,
                 "instructions", instructions,
                 "size", stateSize,
                 "disk_copy", hasDiskCopy,
@@ -145,8 +145,8 @@ namespace Hv86.Vm
             Dictionary<string, object> meta = Json.ReadFile(metaFile);
 
             string version = Json.GetString(meta, "v86_version", "");
-            if (!string.IsNullOrEmpty(version) && version != AppInfo.V86Version)
-                throw new Hv86Exception("снапшот сделан в v86 " + version + ", а встроена " + AppInfo.V86Version);
+            if (!string.IsNullOrEmpty(version) && version != vm.V86Version)
+                throw new Hv86Exception("снапшот сделан в v86 " + version + ", а ВМ на " + vm.V86Version);
 
             int memory = Json.GetInt(meta, "memory_mb", 0);
             if (memory > 0 && memory != vm.MemoryMb)
@@ -209,7 +209,7 @@ namespace Hv86.Vm
                 "created_utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
                 "size", size,
                 "instructions", instructions,
-                "v86_version", AppInfo.V86Version,
+                "v86_version", vm.V86Version,
                 "memory_mb", vm.MemoryMb,
                 "disk_stamp", DiskStamp(vm));
 
@@ -242,7 +242,7 @@ namespace Hv86.Vm
                     Dictionary<string, object> meta = Json.ReadFile(file + ".json");
                     if (meta == null) continue;
 
-                    if (Json.GetString(meta, "v86_version", AppInfo.V86Version) != AppInfo.V86Version) continue;
+                    if (Json.GetString(meta, "v86_version", vm.V86Version) != vm.V86Version) continue;
                     if (Json.GetInt(meta, "memory_mb", vm.MemoryMb) != vm.MemoryMb) continue;
 
                     string metaStamp = Json.GetString(meta, "disk_stamp", "");

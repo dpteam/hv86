@@ -366,6 +366,11 @@ namespace Hv86.Vm
         {
             VmRuntime runtime = Get(id);
 
+            // state v86 между версиями несовместим: чужим движком ВМ не поднять.
+            // Честнее отказать и объяснить, чем уронить гостя на первом откате.
+            if (VmUpgrade.NeedsMigration(runtime.Def))
+                throw new Hv86Exception(VmUpgrade.Hint(runtime.Def));
+
             lock (_gate)
             {
                 if (runtime.Proc != null && !runtime.Proc.HasExited && runtime.Def.State == "running")
@@ -1037,6 +1042,44 @@ namespace Hv86.Vm
             EmitState(runtime);
 
             return Task.FromResult<object>(runtime.Def.ToView());
+        }
+
+        /// <summary>
+        /// Переносит остановленную ВМ на встроенный движок v86: диски остаются,
+        /// снапшоты и чекпоинты старой версии уходят в корзину (state между
+        /// версиями несовместим). Окно ВМ должно быть закрыто: у открытого окна
+        /// своя копия vm.json, и она бы вернула старую версию обратно.
+        /// </summary>
+        public Task<object> MigrateAsync(string id)
+        {
+            VmRuntime runtime = Get(id);
+
+            lock (_gate)
+            {
+                if (runtime.Proc != null && !runtime.Proc.HasExited)
+                    throw new Hv86Exception("остановите ВМ перед переносом на другой движок");
+
+                if (runtime.Idle != null && !runtime.Idle.HasExited)
+                    throw new Hv86Exception("закройте окно ВМ перед переносом на другой движок");
+
+                if (!VmUpgrade.NeedsMigration(runtime.Def))
+                    return Task.FromResult<object>(Json.Obj(
+                        "migrated", false,
+                        "version", runtime.Def.V86Version,
+                        "vm", runtime.Def.ToView()));
+
+                Dictionary<string, object> summary = VmUpgrade.Migrate(runtime.Def);
+
+                VmStore.Save(runtime.Def);
+
+                Emit("vm.updated", runtime.Def.ToView());
+                EmitState(runtime);
+
+                summary["migrated"] = true;
+                summary["vm"] = runtime.Def.ToView();
+
+                return Task.FromResult<object>(summary);
+            }
         }
 
         public Task<object> CloneAsync(string id, string name)

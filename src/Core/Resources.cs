@@ -22,6 +22,9 @@ namespace Hv86.Core
         public const string V86Seabios = "Hv86.Assets.v86.seabios.bin";
         public const string V86Vgabios = "Hv86.Assets.v86.vgabios.bin";
 
+        /// <summary>Манифест вшитых ассетов v86: версия, размеры и SHA-256.</summary>
+        public const string V86Manifest = "Hv86.Assets.v86.manifest.json";
+
         // Каталог пресетов
         public const string Presets = "Hv86.Assets.presets.json";
 

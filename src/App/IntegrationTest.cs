@@ -79,6 +79,15 @@ namespace Hv86.App
                 string id = Json.GetString(created, "id", "");
                 Ok("vm.create", id);
 
+                // перенос движка: у ВМ на встроенной версии это не ошибка, а no-op
+                Dictionary<string, object> migration = Call(client, "vm.migrate", Json.Obj("id", id), 60000);
+
+                if (!Json.GetBool(migration, "migrated", true) &&
+                    Json.GetString(migration, "version", "") == AppInfo.V86Version)
+                    Ok("vm.migrate", "already on the built-in engine " + AppInfo.V86Version);
+                else
+                    Fail("vm.migrate on a fresh VM: " + Json.Stringify(migration));
+
                 // проброс портов: host:2399 -> guest:22 (в FreeDOS TCP нет,
                 // поэтому ждём именно корректный отказ, а не данные)
                 const int forwardPort = 2399;

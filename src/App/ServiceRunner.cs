@@ -151,6 +151,9 @@ namespace Hv86.App
                         Json.GetInt(parameters, "delta", 0),
                         Json.GetInt(parameters, "index", -1)).ConfigureAwait(false);
 
+                case "vm.migrate":
+                    return await _manager.MigrateAsync(id).ConfigureAwait(false);
+
                 case "vm.update":
                     return await _manager.UpdateAsync(id, parameters).ConfigureAwait(false);
 

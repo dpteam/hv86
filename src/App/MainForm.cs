@@ -455,6 +455,27 @@ namespace Hv86.App
                 await PushStateAsync();
             });
 
+            // перенос ВМ на встроенный движок: диски остаются, снапшоты
+            // старой версии уходят - UI спрашивает подтверждение заранее
+            _bridge.Register("vm.migrate", async message =>
+            {
+                object result = await CallService("vm.migrate", Json.Obj(
+                    "id", Json.GetString(message, "id", "")), 300000);
+
+                Dictionary<string, object> summary = result as Dictionary<string, object>;
+
+                if (Json.GetBool(summary, "migrated", false))
+                    _bridge.Send(WebBridge.Msg("toast", "text",
+                        "Moved to v86 " + Json.GetString(summary, "to", "") +
+                        ": snapshots removed " + Json.GetInt(summary, "snapshots", 0),
+                        "kind", "ok"));
+                else
+                    _bridge.Send(WebBridge.Msg("toast", "text",
+                        "Already on v86 " + Json.GetString(summary, "version", ""), "kind", "info"));
+
+                await PushStateAsync();
+            });
+
             _bridge.Register("vm.export", async message =>
             {
                 string id = Json.GetString(message, "id", "");

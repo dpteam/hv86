@@ -134,6 +134,9 @@ namespace Hv86.App
                 case "floppy":
                     return Floppy(client, positional, json);
 
+                case "migrate":
+                    return Migrate(client, positional, json);
+
                 case "create":
                     return Create(client, options, json);
 
@@ -416,6 +419,35 @@ namespace Hv86.App
             Console.WriteLine("вставлена дискета " + (Json.GetInt(result, "floppy_index", 0) + 1) + "/" +
                               Json.GetInt(result, "floppy_count", count) + ": " +
                               Json.GetString(result, "floppy", ""));
+
+            return 0;
+        }
+
+        /// <summary>
+        /// `migrate <vm>`: перенести ВМ на встроенный движок v86. Диски остаются,
+        /// снапшоты и чекпоинты старой версии удаляются - state между версиями
+        /// несовместим, и делать вид, что всё переносится, было бы обманом.
+        /// </summary>
+        private static int Migrate(PipeClient client, List<string> positional, bool json)
+        {
+            string id = ResolveId(client, Positional(positional, 1));
+
+            Dictionary<string, object> result = Result(client, "vm.migrate", Json.Obj("id", id), 180000)
+                as Dictionary<string, object>;
+
+            if (json) Console.WriteLine(Json.Pretty(result));
+
+            if (!Json.GetBool(result, "migrated", false))
+            {
+                Console.WriteLine("ВМ уже на встроенном движке v86 " +
+                                  Json.GetString(result, "version", "") + " - перенос не нужен");
+                return 0;
+            }
+
+            Console.WriteLine("ВМ перенесена с v86 " + Json.GetString(result, "from", "") +
+                              " на " + Json.GetString(result, "to", "") +
+                              "; снапшотов убрано: " + Json.GetInt(result, "snapshots", 0) +
+                              ", чекпоинтов: " + Json.GetInt(result, "checkpoints", 0));
 
             return 0;
         }
@@ -780,6 +812,7 @@ namespace Hv86.App
             Console.WriteLine("  hv86 --cli revert <vm> <снапшот>     откатить");
             Console.WriteLine("  hv86 --cli type <vm> \"текст\" [--enter]   набрать в госте");
             Console.WriteLine("  hv86 --cli floppy <vm> [next|prev|N]     сменить дискету комплекта");
+            Console.WriteLine("  hv86 --cli migrate <vm>                  перенести ВМ на встроенный v86");
             Console.WriteLine("  hv86 --cli screen <vm>               текст с экрана (headless)");
             Console.WriteLine("  hv86 --cli create --name <имя> --preset <id> [--memory МБ] [--disk МБ] [--net relay] [--engine headless] [--share C:\\dir]");
             Console.WriteLine("  hv86 --cli create --name <имя> --iso <файл>");

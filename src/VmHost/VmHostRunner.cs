@@ -106,10 +106,12 @@ namespace Hv86.VmHost
 
             Paths.EnsureVmDirectories(_vm.Id);
 
-            if (_vm.V86Version != AppInfo.V86Version)
+            if (!_idle && VmUpgrade.NeedsMigration(_vm))
             {
-                Log.Warn("VMHOST", "ВМ сделана в v86 " + _vm.V86Version + ", встроена " +
-                                   AppInfo.V86Version + ": state-снапшоты могут не подойти");
+                // окно без гостя открыть можно (движок ещё не нужен), а вот
+                // загрузить чужой версией - нет: служба такую ВМ не стартует
+                Log.Error("VMHOST", VmUpgrade.Hint(_vm));
+                return 4;
             }
 
             if (!string.IsNullOrEmpty(_restorePath))
@@ -990,6 +992,8 @@ namespace Hv86.VmHost
                     // диск, медиа и сеть могли поменяться, пока окно стояло
                     VmDefinition fresh = VmStore.Load(_vmId);
                     if (fresh != null) _vm = fresh;
+
+                    if (VmUpgrade.NeedsMigration(_vm)) throw new Hv86Exception(VmUpgrade.Hint(_vm));
 
                     _idle = false;
                     _forwarder?.Apply(_vm.NetMode == "nat" ? _vm.Forwards : new List<ForwardRule>());

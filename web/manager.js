@@ -288,10 +288,23 @@
                 if (act === "vm.snapshot") enabled = running;
                 if (act === "vm.eject") enabled = !!vm.cdrom;
                 if (act === "vm.clone" || act === "vm.export") enabled = idle;
+                if (act === "vm.migrate") enabled = idle && isForeignEngine(vm);
             }
 
             button.disabled = !enabled;
         }
+
+        // кнопка переноса нужна только тем ВМ, что сделаны на другом движке
+        var migrate = byId("migrateBtn");
+        if (migrate) migrate.hidden = !(vm && isForeignEngine(vm));
+    }
+
+    /// ВМ создана на другой версии v86: запускать её встроенным движком нельзя,
+    /// пока не перенесём (state между версиями несовместим).
+    function isForeignEngine(vm) {
+        var hostVersion = (state.host && state.host.v86) || "";
+
+        return !!vm && hostVersion.length > 0 && !!vm.v86_version && vm.v86_version !== hostVersion;
     }
 
     function renderStatus() {
@@ -752,6 +765,17 @@
 
             case "vm.mount":
                 post({ action: "vm.mount", id: id, kind: "cdrom" });
+                return;
+
+            case "vm.migrate":
+                ask({
+                    title: T("migrate.title"),
+                    label: T("migrate.label"),
+                    hideInput: true
+                }, function () {
+                    post({ action: "vm.migrate", id: id });
+                    toast(T("migrate.doing"), "info");
+                });
                 return;
 
             case "vm.eject":

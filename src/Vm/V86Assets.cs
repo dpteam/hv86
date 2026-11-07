@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using Hv86.Core;
 
 namespace Hv86.Vm
@@ -65,6 +68,98 @@ namespace Hv86.Vm
             {
                 error = ex.Message;
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Сверяет вшитые ассеты v86 с манифестом: версия, размер и SHA-256.
+        /// Ловит самый неприятный случай - файлы заменили, а версию и хэши
+        /// забыли обновить: тогда ВМ создана на одной версии, а исполняется
+        /// другой, и state молча не подходит.
+        /// </summary>
+        public static List<Dictionary<string, object>> VerifyEmbedded()
+        {
+            List<Dictionary<string, object>> results = new List<Dictionary<string, object>>();
+
+            Dictionary<string, object> manifest = Json.ParseObjectSafe(Resources.Text(Resources.V86Manifest));
+            string version = Json.GetString(manifest, "version", "");
+
+            if (version.Length == 0)
+            {
+                results.Add(Json.Obj(
+                    "what", "manifest",
+                    "ok", false,
+                    "detail", "манифест v86 не вшит или пуст"));
+                return results;
+            }
+
+            results.Add(Json.Obj(
+                "what", "v86 version",
+                "ok", version == AppInfo.V86Version,
+                "detail", "манифест " + version + ", приложение " + AppInfo.V86Version));
+
+            List<object> files = Json.GetList(manifest, "files");
+
+            if (files == null || files.Count == 0)
+            {
+                results.Add(Json.Obj("what", "manifest files", "ok", false, "detail", "список файлов пуст"));
+                return results;
+            }
+
+            foreach (object item in files)
+            {
+                Dictionary<string, object> file = item as Dictionary<string, object>;
+                if (file == null) continue;
+
+                string name = Json.GetString(file, "file", "");
+                long size = Json.GetLong(file, "size", 0);
+                string sha = Json.GetString(file, "sha256", "");
+
+                byte[] bytes = Resources.Bytes(ResourceFor(name));
+
+                if (bytes == null)
+                {
+                    results.Add(Json.Obj("what", name, "ok", false, "detail", "нет вшитого ресурса"));
+                    continue;
+                }
+
+                string actual = Sha256Of(bytes);
+                bool ok = bytes.Length == size && string.Equals(actual, sha, StringComparison.OrdinalIgnoreCase);
+
+                results.Add(Json.Obj(
+                    "what", name,
+                    "ok", ok,
+                    "detail", ok
+                        ? bytes.Length + " байт, sha256 " + actual.Substring(0, 12) + "…"
+                        : "ожидалось " + size + " байт / " + sha.Substring(0, Math.Min(12, sha.Length)) +
+                          "…, в сборке " + bytes.Length + " байт / " + actual.Substring(0, 12) + "…"));
+            }
+
+            return results;
+        }
+
+        private static string ResourceFor(string fileName)
+        {
+            switch ((fileName ?? "").ToLowerInvariant())
+            {
+                case "libv86.js": return Resources.V86Lib;
+                case "v86.wasm": return Resources.V86Wasm;
+                case "seabios.bin": return Resources.V86Seabios;
+                case "vgabios.bin": return Resources.V86Vgabios;
+                default: return null;
+            }
+        }
+
+        private static string Sha256Of(byte[] bytes)
+        {
+            using (SHA256 sha = SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(bytes);
+                StringBuilder text = new StringBuilder(hash.Length * 2);
+
+                foreach (byte b in hash) text.Append(b.ToString("x2"));
+
+                return text.ToString();
             }
         }
 

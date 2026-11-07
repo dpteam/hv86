@@ -26,11 +26,19 @@
 
 .PARAMETER Force
     Re-download even if the files already exist.
+
+.PARAMETER Check
+    Verify the files in assets\v86\<version>\ against manifest.json (size and
+    SHA-256) and exit. Useful before a release and in CI.
+
+.EXAMPLE
+    powershell -File tools\fetch-v86.ps1 -Check
 #>
 [CmdletBinding()]
 param(
     [string]$Version = '0.5.473',
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Check
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,6 +48,44 @@ $root     = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $v86Root  = Join-Path $root 'assets\v86'
 $outDir   = Join-Path $v86Root $Version
 $manifest = Join-Path $v86Root 'manifest.json'
+
+if ($Check) {
+    if (-not (Test-Path $manifest)) {
+        Write-Host "[ERROR] manifest not found: $manifest" -ForegroundColor Red
+        exit 1
+    }
+
+    $doc = Get-Content $manifest -Raw | ConvertFrom-Json
+    $bad = 0
+
+    Write-Host ("manifest version: {0}" -f $doc.version)
+
+    foreach ($item in $doc.files) {
+        $path = Join-Path $outDir $item.file
+
+        if (-not (Test-Path $path)) {
+            Write-Host ("[FAIL] {0} - missing" -f $item.file) -ForegroundColor Red
+            $bad++
+            continue
+        }
+
+        $size = (Get-Item $path).Length
+        $hash = (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLowerInvariant()
+
+        if ($size -ne $item.size -or $hash -ne $item.sha256) {
+            Write-Host ("[FAIL] {0} - {1} bytes / {2}; manifest says {3} / {4}" -f `
+                $item.file, $size, $hash, $item.size, $item.sha256) -ForegroundColor Red
+            $bad++
+        } else {
+            Write-Host ("[ok]   {0} - {1} bytes, {2}" -f $item.file, $size, $hash.Substring(0, 12))
+        }
+    }
+
+    if ($bad -gt 0) { exit 1 }
+
+    Write-Host 'v86 assets match the manifest'
+    exit 0
+}
 
 $files = @('libv86.js', 'v86.wasm', 'seabios.bin', 'vgabios.bin')
 $have  = @($files | Where-Object { Test-Path (Join-Path $outDir $_) })
