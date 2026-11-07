@@ -621,15 +621,41 @@ namespace Hv86.App
             string work = Path.Combine(dir, "replica");
             Directory.CreateDirectory(work);
 
-            int port = FreePort();
-            ReplicaStore store = new ReplicaStore(Path.Combine(work, "store"));
+            // Порт подбираем и сразу занимаем; на загруженной машине между
+            // FreePort() и Start() его может забрать кто-то ещё, поэтому
+            // пробуем несколько раз - тест не должен зависеть от соседей.
+            ReplicaServer server = null;
+            string url = null;
 
-            using (ReplicaServer server = new ReplicaServer(store, port, "s3cret", false))
+            for (int attempt = 0; attempt < 5 && server == null; attempt++)
             {
-                server.Start();
+                int port = FreePort();
+                ReplicaServer candidate = new ReplicaServer(
+                    new ReplicaStore(Path.Combine(work, "store")), port, "s3cret", false);
 
-                // адрес берём у самого приёмника: он мог выбрать не localhost
-                string url = server.BaseUrl;
+                try
+                {
+                    candidate.Start();
+                    server = candidate;
+                    url = candidate.BaseUrl;
+                }
+                catch (Exception ex)
+                {
+                    candidate.Dispose();
+                    Log.Warn("UNIT", "порт реплики " + port + " не открылся: " + ex.Message);
+                    System.Threading.Thread.Sleep(100);
+                }
+            }
+
+            if (server == null)
+            {
+                Fail("replica: no listener could be started on a free port");
+                return;
+            }
+
+            using (server)
+            {
+                ReplicaStore store = new ReplicaStore(Path.Combine(work, "store"));
 
                 Dictionary<string, object> hello = ReplicaClient.HelloAsync(url, "s3cret", 15000)
                     .GetAwaiter().GetResult();
