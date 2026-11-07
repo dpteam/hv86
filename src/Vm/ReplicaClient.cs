@@ -112,6 +112,30 @@ namespace Hv86.Vm
                 .ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Отправляет файл медиа (CD/дискету). Путь - как в vm.json (`media/boot.iso`).
+        /// </summary>
+        public static async Task<Dictionary<string, object>> PutMediaAsync(string url, string token,
+            string vmId, int epoch, string relativePath, string fullPath, int timeoutMs)
+        {
+            if (!File.Exists(fullPath)) throw new Hv86Exception("медиа не найдено: " + fullPath);
+
+            long size = new FileInfo(fullPath).Length;
+
+            string query = "?vm=" + Uri.EscapeDataString(vmId) +
+                           "&epoch=" + epoch +
+                           "&size=" + size +
+                           "&sha256=" + AtomicFile.Sha256(fullPath) +
+                           "&path=" + Uri.EscapeDataString(relativePath);
+
+            using (FileStream body = new FileStream(fullPath, FileMode.Open, FileAccess.Read,
+                       FileShare.ReadWrite, 1 << 16, FileOptions.SequentialScan))
+            {
+                return await SendAsync(HttpMethod.Put, url + "media" + query, token, body, timeoutMs, size)
+                    .ConfigureAwait(false);
+            }
+        }
+
         private static async Task<Dictionary<string, object>> SendAsync(HttpMethod method, string url,
             string token, Stream body, int timeoutMs, long? length)
         {

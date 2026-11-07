@@ -743,6 +743,7 @@ namespace Hv86.App
             vm2.Id = "abcd1234";
             vm2.Name = "promote";
             vm2.MemoryMb = 32;
+            vm2.CdromFile = "media/boot.iso";
 
             using (FileStream body = File.OpenRead(disk2))
                 solo.Begin("abcd1234", 1, "promote", Json.Stringify(vm2.ToDict()), 2 * 1024 * 1024, null, body);
@@ -754,6 +755,28 @@ namespace Hv86.App
 
             using (FileStream body = File.OpenRead(state2))
                 solo.PutState("abcd1234", 1, 9, body, out duplicate2, 4242);
+
+            // медиа: CD едет на реплику вместе с диском
+            string iso = Path.Combine(work, "boot.iso");
+            File.WriteAllBytes(iso, new byte[256 * 1024]);
+
+            using (FileStream body = File.OpenRead(iso))
+                solo.PutMedia("abcd1234", 1, "media/boot.iso", new FileInfo(iso).Length,
+                    AtomicFile.Sha256(iso), body);
+
+            Check(File.Exists(Path.Combine(solo.Dir("abcd1234"), "media", "boot.iso")),
+                "replica: media file is accepted");
+
+            bool badPathRefused = false;
+
+            try
+            {
+                using (FileStream body = File.OpenRead(iso))
+                    solo.PutMedia("abcd1234", 1, "media/../evil.iso", 1024, null, body);
+            }
+            catch (Hv86Exception) { badPathRefused = true; }
+
+            Check(badPathRefused, "replica: media path outside the replica dir is refused");
 
             string stagedState;
             Dictionary<string, object> promoted = solo.Promote("abcd1234", out stagedState);
@@ -767,6 +790,10 @@ namespace Hv86.App
             Check(back != null && back.HdaFile == "disks/system.img" && back.FdaFile == null &&
                   back.State == "stopped" && back.V86Version == AppInfo.V86Version,
                 "replica: promoted VM has host-local media paths");
+
+            Check(back != null && back.CdromFile == "media/boot.iso" &&
+                  File.Exists(Path.Combine(Paths.VmMediaDir("abcd1234"), "boot.iso")),
+                "replica: promoted VM keeps the replicated CD");
 
             Check(Json.GetInt(promoted, "relay_port", 0) == 4242,
                 "replica: relay port travels with the state");

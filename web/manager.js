@@ -96,6 +96,16 @@
 
         if (mode === "replica" && vm.replica) text += " · " + vm.replica;
 
+        // удалённая реплика: видно, когда последний state дошёл и не сломалось ли
+        if (mode === "remote") {
+            var state = vm.remote_state || "";
+            if (state === "error") text += " · ошибка";
+            else if (state === "base") text += " · отправляю образ";
+            else if (state === "pushing") text += " · шлю state";
+            else if (state === "ok") text += " · " + (vm.remote_age_sec || 0) + "s назад";
+            else text += " · нет связи";
+        }
+
         return text;
     }
 

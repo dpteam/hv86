@@ -130,6 +130,109 @@ namespace Hv86.Vm
         }
 
         /// <summary>
+        /// Принимает файл медиа (CD/дискету). Путь относительный, как в vm.json
+        /// (`media/boot.iso`): так подъём восстанавливает ровно то, что просил гость.
+        /// </summary>
+        public Dictionary<string, object> PutMedia(string vmId, int epoch, string relative,
+            long expectedSize, string expectedSha, Stream body)
+        {
+            string dir = Dir(vmId);
+            Dictionary<string, object> meta = Read(vmId);
+
+            if (meta == null) throw new ReplicaConflict("реплика не начата: сначала begin");
+
+            if (Json.GetInt(meta, "epoch", 0) != epoch)
+                throw new ReplicaConflict("эпоха не совпадает: у реплики " +
+                                          Json.GetInt(meta, "epoch", 0) + ", прислали " + epoch);
+
+            // путь приходит по сети - принимаем только «media/имя» без выхода наверх
+            string name = NormalizeMediaPath(relative);
+            if (name == null) throw new Hv86Exception("некорректный путь медиа: " + relative);
+
+            string mediaDir = Path.Combine(dir, "media");
+            Directory.CreateDirectory(mediaDir);
+
+            string part = Path.Combine(mediaDir, name + ".part");
+            string target = Path.Combine(mediaDir, name);
+
+            string actual;
+
+            try
+            {
+                actual = CopyHashed(body, part, expectedSize);
+            }
+            catch
+            {
+                TryDelete(part);
+                throw;
+            }
+
+            if (!string.IsNullOrEmpty(expectedSha) &&
+                !string.Equals(actual, expectedSha, StringComparison.OrdinalIgnoreCase))
+            {
+                TryDelete(part);
+
+                throw new ReplicaConflict("хэш медиа не совпал: ожидался " + Short(expectedSha) +
+                                          ", принят " + Short(actual));
+            }
+
+            if (File.Exists(target)) AtomicFile.Move(part, target);
+            else File.Move(part, target);
+
+            List<object> items = Json.GetList(meta, "media");
+
+            if (items == null)
+            {
+                items = new List<object>();
+                meta["media"] = items;
+            }
+
+            bool replaced = false;
+
+            for (int i = 0; i < items.Count; i++)
+            {
+                Dictionary<string, object> item = items[i] as Dictionary<string, object>;
+                if (item == null) continue;
+
+                if (Json.GetString(item, "path", "") != "media/" + name) continue;
+
+                items[i] = Json.Obj("path", "media/" + name, "size", expectedSize, "sha256", actual);
+                replaced = true;
+            }
+
+            if (!replaced)
+                items.Add(Json.Obj("path", "media/" + name, "size", expectedSize, "sha256", actual));
+
+            meta["updated_utc"] = DateTime.UtcNow.ToString("o");
+            Json.WriteFile(Path.Combine(dir, "replica.json"), meta);
+
+            Log.Info("REPL", "медиа " + name + " для " + vmId + ": " + (expectedSize / 1024) + " КБ");
+
+            return meta;
+        }
+
+        /// <summary>
+        /// «media/boot.iso» -> «boot.iso». Всё остальное - отказ: по сети приходят
+        /// пути, и вылезти через них из каталога реплики нельзя.
+        /// </summary>
+        public static string NormalizeMediaPath(string relative)
+        {
+            if (string.IsNullOrEmpty(relative)) return null;
+
+            string text = relative.Replace('\\', '/').TrimStart('/');
+
+            if (!text.StartsWith("media/", StringComparison.OrdinalIgnoreCase)) return null;
+
+            string name = text.Substring("media/".Length);
+
+            if (name.Length == 0 || name.IndexOf('/') >= 0) return null;
+            if (name == "." || name == "..") return null;
+            if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return null;
+
+            return name;
+        }
+
+        /// <summary>
         /// Принимает state. Возвращает meta; duplicate=true, если такой seq уже был
         /// (повтор после обрыва связи не должен ломать реплику).
         /// </summary>
@@ -258,10 +361,11 @@ namespace Hv86.Vm
             def.Id = vmId;
             def.Name = string.IsNullOrEmpty(def.Name) ? vmId : def.Name;
             def.HdaFile = "disks/system.img";
-            def.FdaFile = null;
-            def.FdaSet = new List<string>();
-            def.FdaIndex = 0;
-            def.CdromFile = null;
+
+            // медиа: то, что реплика успела принять, оставляем; чего нет -
+            // честно вычищаем, иначе ВМ будет ссылаться на несуществующий файл
+            RestoreMedia(vmId, dir, meta, def);
+
             def.State = "stopped";
             def.Restarts = 0;
             def.LastError = "";
@@ -296,6 +400,56 @@ namespace Hv86.Vm
                 "epoch", Json.GetInt(meta, "epoch", 0),
                 "relay_port", Json.GetInt(meta, "relay_port", 0),
                 "state", stateTarget);
+        }
+
+        /// <summary>
+        /// Переносит принятые медиа в каталог ВМ и приводит описание в порядок:
+        /// остаются только те файлы, которые реально приехали.
+        /// </summary>
+        private static void RestoreMedia(string vmId, string replicaDir, Dictionary<string, object> meta,
+            VmDefinition def)
+        {
+            List<object> items = Json.GetList(meta, "media");
+            HashSet<string> present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (object item in items ?? new List<object>())
+            {
+                Dictionary<string, object> entry = item as Dictionary<string, object>;
+                if (entry == null) continue;
+
+                string name = NormalizeMediaPath(Json.GetString(entry, "path", ""));
+                if (name == null) continue;
+
+                string source = Path.Combine(replicaDir, "media", name);
+                if (!File.Exists(source)) continue;
+
+                string target = Path.Combine(Paths.VmMediaDir(vmId), name);
+                Directory.CreateDirectory(Path.GetDirectoryName(target) ?? Paths.VmMediaDir(vmId));
+
+                AtomicFile.Move(source, target);
+                present.Add("media/" + name);
+            }
+
+            if (string.IsNullOrEmpty(def.CdromFile) || !present.Contains(def.CdromFile.Replace('\\', '/')))
+                def.CdromFile = null;
+
+            if (def.FdaSet != null && def.FdaSet.Count > 0)
+            {
+                List<string> kept = new List<string>();
+
+                foreach (string item in def.FdaSet)
+                    if (present.Contains(item.Replace('\\', '/'))) kept.Add(item);
+
+                def.FdaSet = kept;
+                def.FdaIndex = Math.Max(0, Math.Min(def.FdaIndex, kept.Count - 1));
+
+                if (kept.Count == 0) def.FdaFile = null;
+                else def.FdaFile = kept[def.FdaIndex];
+            }
+            else if (!string.IsNullOrEmpty(def.FdaFile) && !present.Contains(def.FdaFile.Replace('\\', '/')))
+            {
+                def.FdaFile = null;
+            }
         }
 
         public Dictionary<string, object> Status(string vmId)

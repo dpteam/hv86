@@ -243,6 +243,24 @@ namespace Hv86.Vm
                     return;
                 }
 
+                if (path.EndsWith("/media", StringComparison.OrdinalIgnoreCase) && method == "PUT")
+                {
+                    Dictionary<string, string> query = Query(context.Request.Url);
+
+                    Dictionary<string, object> meta = _store.PutMedia(
+                        Value(query, "vm"),
+                        ToInt(Value(query, "epoch")),
+                        Value(query, "path"),
+                        ToLong(Value(query, "size")),
+                        Value(query, "sha256"),
+                        context.Request.InputStream);
+
+                    await RespondAsync(context, 200, Json.Obj("ok", true,
+                        "media", Json.GetList(meta, "media") == null ? 0 : Json.GetList(meta, "media").Count))
+                        .ConfigureAwait(false);
+                    return;
+                }
+
                 if (path.EndsWith("/status", StringComparison.OrdinalIgnoreCase) && method == "GET")
                 {
                     Dictionary<string, string> query = Query(context.Request.Url);

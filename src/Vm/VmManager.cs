@@ -944,6 +944,10 @@ namespace Hv86.Vm
             }
 
             Emit("vm.media", Json.Obj("id", id, "kind", kind, "file", Path.GetFileName(target)));
+
+            // медиа поменялось - досылаем реплике в фоне
+            PushRemoteMedia(runtime);
+
             return runtime.Def.ToView();
         }
 
@@ -1013,6 +1017,10 @@ namespace Hv86.Vm
             }
 
             Emit("vm.floppy", Json.Obj("id", id, "file", fileName, "index", position, "count", count));
+
+            // набор дискет тоже часть состояния носителя
+            PushRemoteMedia(runtime);
+
             return runtime.Def.ToView();
         }
 
@@ -1776,6 +1784,68 @@ namespace Hv86.Vm
         /// уезжает целиком: state кумулятивен относительно образа на момент
         /// старта ВМ, поэтому реплике нужен именно он.
         /// </summary>
+        /// <summary>
+        /// Медиа, которые надо отправить реплике: CD и дискеты (набор - целиком).
+        /// </summary>
+        private List<string> MediaFiles(VmDefinition def)
+        {
+            List<string> files = new List<string>();
+
+            if (!string.IsNullOrEmpty(def.CdromFile)) files.Add(def.CdromFile);
+
+            if (def.FdaSet != null && def.FdaSet.Count > 0) files.AddRange(def.FdaSet);
+            else if (!string.IsNullOrEmpty(def.FdaFile)) files.Add(def.FdaFile);
+
+            List<string> existing = new List<string>();
+
+            foreach (string relative in files)
+            {
+                try
+                {
+                    if (File.Exists(Paths.Absolute(def.Id, relative))) existing.Add(relative);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("FT", "медиа " + relative + ": " + ex.Message);
+                }
+            }
+
+            return existing;
+        }
+
+        /// <summary>
+        /// Досылает изменённое медиа (вставили CD, сменили дискету). Делаем в фоне:
+        /// вставка носителя не должна ждать сеть.
+        /// </summary>
+        private void PushRemoteMedia(VmRuntime runtime)
+        {
+            VmDefinition def = runtime.Def;
+
+            if (def.FtMode != "remote" || string.IsNullOrEmpty(def.ReplicaUrl)) return;
+
+            string url = ReplicaClient.NormalizeUrl(def.ReplicaUrl);
+            string token = def.ReplicaToken;
+            int epoch = def.ReplicaEpoch;
+            string id = def.Id;
+            List<string> files = MediaFiles(def);
+
+            Task.Run(async delegate
+            {
+                foreach (string relative in files)
+                {
+                    try
+                    {
+                        await ReplicaClient.PutMediaAsync(url, token, id, epoch, relative,
+                            Paths.Absolute(id, relative), 1800000).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("FT", "реплика " + id + ": медиа " + relative + " не отправлено: " + ex.Message);
+                    }
+                }
+            });
+        }
+
         private void PushRemoteBase(VmRuntime runtime, int epoch)
         {
             VmDefinition def = runtime.Def;
@@ -1809,6 +1879,21 @@ namespace Hv86.Vm
                 {
                     Dictionary<string, object> meta = await ReplicaClient.BeginAsync(url, token, def, disk, epoch,
                         1800000).ConfigureAwait(false);
+
+                    // медиа: без них поднятая ВМ останется без CD/дискеты.
+                    // Неудача по одному файлу не отменяет репликацию диска.
+                    foreach (string relative in MediaFiles(def))
+                    {
+                        try
+                        {
+                            await ReplicaClient.PutMediaAsync(url, token, id, epoch, relative,
+                                Paths.Absolute(id, relative), 1800000).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warn("FT", "реплика " + id + ": медиа " + relative + " не отправлено: " + ex.Message);
+                        }
+                    }
 
                     lock (_gate)
                     {
