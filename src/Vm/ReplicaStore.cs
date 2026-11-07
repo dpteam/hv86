@@ -281,20 +281,14 @@ namespace Hv86.Vm
 
             // принятая копия больше не нужна: она уже в каталоге ВМ. Ошибку уборки
             // не глотаем молча - иначе непонятно, почему копия осталась
-            bool hadStaged = Directory.Exists(dir);
-
             try
             {
-                if (hadStaged) AtomicFile.MoveToTrash(dir, "replica-promoted-" + vmId);
+                if (Directory.Exists(dir)) AtomicFile.MoveToTrash(dir, "replica-promoted-" + vmId);
             }
             catch (Exception ex)
             {
                 Log.Warn("REPL", "принятая копия " + vmId + " не убрана: " + ex.Message);
             }
-
-            Log.Info("REPL", "уборка принятой копии " + vmId + ": каталог " + dir +
-                             (hadStaged ? " был" : " не найден") +
-                             ", после уборки " + (Directory.Exists(dir) ? "остался" : "нет"));
 
             return Json.Obj(
                 "vm", def,
