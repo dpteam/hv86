@@ -35,6 +35,16 @@ namespace Hv86.Vm
         public string CdromFile = null;
         public string FdaFile = null;
 
+        /// <summary>
+        /// Комплект дискет (например, установочные диски MS-DOS): пути внутри
+        /// каталога ВМ. В консоли можно «вставить следующую». Пусто - обычная
+        /// одна дискета в FdaFile.
+        /// </summary>
+        public List<string> FdaSet = new List<string>();
+
+        /// <summary>Какая дискета из набора сейчас вставлена (0-based).</summary>
+        public int FdaIndex;
+
         public string NetType = "virtio";
         public string NetMode = "nat";
         public string BootOrder = "auto";
@@ -150,16 +160,27 @@ namespace Hv86.Vm
                     netBlock["egress"] = Json.Obj("mode", EgressMode, "allow", allow);
                 }
 
+                Dictionary<string, object> mediaBlock = Json.Obj(
+                        "hda", HdaFile,
+                        "cdrom", CdromFile,
+                        "fda", FdaFile);
+
+                if (FdaSet != null && FdaSet.Count > 0)
+                {
+                    List<object> set = new List<object>();
+                    foreach (string item in FdaSet) set.Add(item);
+
+                    mediaBlock["fda_set"] = set;
+                    mediaBlock["fda_index"] = FdaIndex;
+                }
+
                 return Json.Obj(
                     "id", Id,
                     "name", Name,
                     "memory_mb", MemoryMb,
                     "vga_memory_mb", VgaMemoryMb,
                     "engine", Engine,
-                    "media", Json.Obj(
-                        "hda", HdaFile,
-                        "cdrom", CdromFile,
-                        "fda", FdaFile),
+                    "media", mediaBlock,
                     "net", netBlock,
                 "boot_order", BootOrder,
                 "autostart", Autostart,
@@ -192,6 +213,23 @@ namespace Hv86.Vm
                 vm.HdaFile = Json.GetString(media, "hda", null);
                 vm.CdromFile = Json.GetString(media, "cdrom", null);
                 vm.FdaFile = Json.GetString(media, "fda", null);
+
+                vm.FdaSet = new List<string>();
+
+                List<object> set = Json.GetList(media, "fda_set");
+                if (set != null)
+                {
+                    foreach (object item in set)
+                        if (item is string text && text.Length > 0) vm.FdaSet.Add(text);
+                }
+
+                vm.FdaIndex = Json.GetInt(media, "fda_index", 0);
+
+                // индекс в файле мог остаться от другой версии набора
+                if (vm.FdaSet.Count == 0) vm.FdaIndex = 0;
+                else if (vm.FdaIndex < 0 || vm.FdaIndex >= vm.FdaSet.Count) vm.FdaIndex = 0;
+
+                if (vm.FdaSet.Count > 0) vm.FdaFile = vm.FdaSet[vm.FdaIndex];
             }
 
             Dictionary<string, object> textBlock = Json.GetObject(map, "text");
@@ -275,6 +313,9 @@ namespace Hv86.Vm
                 "disk", DescribeMedia(HdaFile),
                 "cdrom", DescribeMedia(CdromFile),
                 "floppy", DescribeMedia(FdaFile),
+                "floppy_count", FdaSet == null ? 0 : FdaSet.Count,
+                "floppy_index", FdaIndex,
+                "floppy_set", FdaSetView(),
                 "autostart", Autostart,
                 "net_mode", NetMode,
                 "share_path", SharePath,
@@ -301,6 +342,18 @@ namespace Hv86.Vm
             if (string.IsNullOrEmpty(relative)) return null;
             try { return Path.GetFileName(relative); }
             catch { return relative; }
+        }
+
+        /// <summary>Имена дискет набора для интерфейса (без путей).</summary>
+        private List<object> FdaSetView()
+        {
+            List<object> list = new List<object>();
+
+            if (FdaSet == null) return list;
+
+            foreach (string item in FdaSet) list.Add(DescribeMedia(item));
+
+            return list;
         }
 
         private List<object> ForwardsView()

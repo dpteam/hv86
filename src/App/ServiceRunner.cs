@@ -146,6 +146,11 @@ namespace Hv86.App
                 case "vm.eject":
                     return await _manager.EjectAsync(id, Json.GetString(parameters, "kind", "cdrom")).ConfigureAwait(false);
 
+                case "vm.floppy":
+                    return await _manager.FloppyAsync(id,
+                        Json.GetInt(parameters, "delta", 0),
+                        Json.GetInt(parameters, "index", -1)).ConfigureAwait(false);
+
                 case "vm.update":
                     return await _manager.UpdateAsync(id, parameters).ConfigureAwait(false);
 

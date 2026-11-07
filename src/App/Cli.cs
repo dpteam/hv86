@@ -131,6 +131,9 @@ namespace Hv86.App
                 case "paste":
                     return TypeText(client, positional, options, json);
 
+                case "floppy":
+                    return Floppy(client, positional, json);
+
                 case "create":
                     return Create(client, options, json);
 
@@ -352,6 +355,67 @@ namespace Hv86.App
             else
                 Console.WriteLine("введено " + Json.GetInt(result, "chars", 0) + " символов (" +
                                   (enter ? "с Enter" : "без Enter") + ")");
+
+            return 0;
+        }
+
+        /// <summary>
+        /// `floppy <vm> [next|prev|N]`: вставить следующую/предыдущую дискету
+        /// комплекта или конкретную (0-based индекс). Без аргумента - показать.
+        /// </summary>
+        private static int Floppy(PipeClient client, List<string> positional, bool json)
+        {
+            string id = ResolveId(client, Positional(positional, 1));
+            string what = Positional(positional, 2);
+
+            Dictionary<string, object> view = Result(client, "vm.get", Json.Obj("id", id), 15000)
+                as Dictionary<string, object>;
+
+            int count = Json.GetInt(view, "floppy_count", 0);
+
+            if (string.IsNullOrEmpty(what))
+            {
+                if (json) Console.WriteLine(Json.Pretty(view));
+
+                Console.WriteLine(count == 0
+                    ? "у ВМ нет комплекта дискет"
+                    : "дискета " + (Json.GetInt(view, "floppy_index", 0) + 1) + "/" + count +
+                      ": " + Json.GetString(view, "floppy", ""));
+
+                return count == 0 ? 1 : 0;
+            }
+
+            if (count == 0)
+            {
+                Console.Error.WriteLine("у ВМ нет комплекта дискет (одна дискета или ни одной)");
+                return 1;
+            }
+
+            Dictionary<string, object> parameters = Json.Obj("id", id);
+
+            if (what == "next") parameters["delta"] = 1;
+            else if (what == "prev") parameters["delta"] = -1;
+            else
+            {
+                int index;
+
+                if (!int.TryParse(what, out index) || index < 0 || index >= count)
+                {
+                    Console.Error.WriteLine("нужен next, prev или индекс 0.." + (count - 1));
+                    return 2;
+                }
+
+                parameters["index"] = index;
+            }
+
+            Dictionary<string, object> result = Result(client, "vm.floppy", parameters, 60000)
+                as Dictionary<string, object>;
+
+            if (json) Console.WriteLine(Json.Pretty(result));
+
+            Console.WriteLine("вставлена дискета " + (Json.GetInt(result, "floppy_index", 0) + 1) + "/" +
+                              Json.GetInt(result, "floppy_count", count) + ": " +
+                              Json.GetString(result, "floppy", ""));
 
             return 0;
         }
@@ -715,6 +779,7 @@ namespace Hv86.App
             Console.WriteLine("  hv86 --cli snapshots <vm>            список снапшотов");
             Console.WriteLine("  hv86 --cli revert <vm> <снапшот>     откатить");
             Console.WriteLine("  hv86 --cli type <vm> \"текст\" [--enter]   набрать в госте");
+            Console.WriteLine("  hv86 --cli floppy <vm> [next|prev|N]     сменить дискету комплекта");
             Console.WriteLine("  hv86 --cli screen <vm>               текст с экрана (headless)");
             Console.WriteLine("  hv86 --cli create --name <имя> --preset <id> [--memory МБ] [--disk МБ] [--net relay] [--engine headless] [--share C:\\dir]");
             Console.WriteLine("  hv86 --cli create --name <имя> --iso <файл>");

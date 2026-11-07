@@ -10,7 +10,7 @@
  *   {action:"log", text}                          строка в лог
  *   {action:"state", state}                       running/paused/failed/…
  *   {action:"metrics", instructions, mips}        раз в секунду
- *   {action:"ctrl", cmd}                          run/pause/reset/snapshot/iso/eject/hide/screenshot
+ *   {action:"ctrl", cmd}                          run/pause/reset/snapshot/iso/eject/hide/screenshot/floppy-prev/floppy-next
  *   {action:"stateChunk", token, seq, data}       кусок state-файла (base64)
  *   {action:"stateDone", token, size, ms}
  *   {action:"stateError", token, message}
@@ -23,7 +23,7 @@
  * Хост -> страница:
  *   {action:"boot", config}                       создать эмулятор
  *   {action:"ack", token, seq}                    подтверждение куска state
- *   {action:"attach", kind, url, size}            вставить образ
+ *   {action:"attach", kind, url, size, index, count}  вставить образ (для набора дискет - какая именно)
  *   {action:"detach", kind}                       извлечь образ
  *   {action:"type", text}                         набрать текст в гостя
  *   {action:"fetchProbe", url}                    диагностика egress
@@ -50,6 +50,10 @@
     var appliedScale = 1;
     var nativeSize = { w: 0, h: 0 };
     var captured = false;
+
+    // комплект дискет: сколько их и какая вставлена (листает служба)
+    var floppyIndex = 0;
+    var floppyCount = 0;
 
     function storageGet(key, fallback) {
         try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
@@ -83,6 +87,28 @@
 
         // размер ячейки изменился - пересчитываем масштаб
         requestAnimationFrame(function () { measureNative(); applyScale(); });
+    }
+
+    // --------------------------------------------------------------- дискеты
+
+    // Комплект дискет (установочные диски DOS): их несколько, вставляется одна.
+    // Само листание делает служба (она владеет vm.json), страница только просит
+    // и показывает «2/5». Кнопки видны лишь при наборе больше одной дискеты.
+    function setFloppy(index, count) {
+        if (typeof count === "number" && count >= 0) floppyCount = count;
+        if (typeof index === "number" && index >= 0) floppyIndex = index;
+
+        var group = byId("floppy-group");
+        var label = byId("floppy-count");
+
+        if (group) group.classList.toggle("hidden", floppyCount <= 1);
+
+        if (label) {
+            label.textContent = (floppyIndex + 1) + "/" + Math.max(floppyCount, 1);
+
+            label.classList.add("flash");
+            setTimeout(function () { label.classList.remove("flash"); }, 600);
+        }
     }
 
     // ---------------------------------------------------------------- масштаб
@@ -393,6 +419,8 @@
 
         byId("vm-name").textContent = c.name || c.id || "VM";
         byId("vm-id").textContent = c.id || "";
+
+        setFloppy(c.floppyIndex, c.floppyCount);
 
         // общая папка web-движка: протокол 9p в JS, файлы - в C# через
         // синхронные POST (handle9p у v86 синхронный)
@@ -726,6 +754,12 @@
             return;
         }
 
+        // дискету можно сменить и у выключенной ВМ: это про vm.json, не про эмулятор
+        if (cmd === "floppy-prev" || cmd === "floppy-next") {
+            post({ action: "ctrl", cmd: cmd });
+            return;
+        }
+
         if (!emu) return;
 
         try {
@@ -838,6 +872,20 @@
                 typeText(message);
                 break;
 
+            // диагностика: что сейчас на экране гостя (текстовый режим - как есть)
+            case "screenProbe":
+            {
+                var textLayer = document.querySelector("#screen_container > div");
+                var canvas = document.querySelector("#screen_container > canvas");
+
+                post({
+                    action: "screenResult",
+                    text: textLayer ? (textLayer.textContent || "") : "",
+                    graphics: !!(canvas && canvas.style.display !== "none")
+                });
+                break;
+            }
+
             // диагностика масштаба: применяем режим и отдаём реальный размер экрана
             case "scaleProbe":
             {
@@ -859,6 +907,9 @@
                         font: style ? style.fontFamily : "",
                         fontSize: style ? style.fontSize : "",
                         capture: (config && config.captureRelease) || "",
+                        floppyCount: floppyCount,
+                        floppyIndex: floppyIndex,
+                        floppyVisible: !!(byId("floppy-group") && !byId("floppy-group").classList.contains("hidden")),
                         wrap: (function () {
                             var wrap = document.querySelector(".screen-wrap");
                             return wrap ? wrap.clientWidth + "x" + wrap.clientHeight : "";
@@ -919,16 +970,25 @@
 
             case "attach":
                 try {
-                    var image = { url: message.url, size: message.size };
-                    if (message.kind === "fda") emu.set_fda(image);
-                    else emu.set_cdrom(image);
+                    // у выключенной ВМ эмулятора ещё нет - счётчик дискет всё
+                    // равно обновляем: набор уже сменён в vm.json
+                    if (emu) {
+                        var image = { url: message.url, size: message.size };
+                        if (message.kind === "fda") emu.set_fda(image);
+                        else emu.set_cdrom(image);
+                    }
                 } catch (e) {
                     post({ action: "error", message: String(e && e.message || e) });
                 }
+
+                // смена дискеты набора: обновляем счётчик в панели
+                if (message.kind === "fda" && typeof message.count === "number")
+                    setFloppy(message.index, message.count);
                 break;
 
             case "detach":
                 try {
+                    if (!emu) break;
                     if (message.kind === "fda") emu.eject_fda();
                     else emu.eject_cdrom();
                 } catch (e) {

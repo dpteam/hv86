@@ -40,6 +40,13 @@ body.console {
 .cbtn:disabled { opacity: .35; cursor: default; }
 .cbtn.danger:hover:not(:disabled) { border-color: #7a2c2c; color: #ff9d9d; }
 .sep { width: 1px; height: 18px; background: #223043; margin: 0 4px; }
+.floppy-group { display: inline-flex; align-items: center; gap: 3px; }
+.floppy-group.hidden { display: none; }
+.floppy-count {
+  min-width: 26px; text-align: center; color: #9fb4cc;
+  font-family: Consolas, monospace; font-size: 11px;
+}
+.floppy-count.flash { color: #dceaff; }
 .con-right { min-width: 220px; text-align: right; color: #7f93ab; font-family: Consolas, monospace; font-size: 11px; }
 .screen-wrap { flex: 1 1 auto; overflow: auto; display: flex; background: #05070b; }
 .screen { background: #000; line-height: 0; margin: auto; }
@@ -94,6 +101,11 @@ body.console {
     <button class="cbtn" data-cmd="eject" title="Eject CD" aria-label="Eject">
       <svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 9.6 L8 4.4 L12 9.6 Z" fill="currentColor"/><rect x="3.6" y="11" width="8.8" height="1.6" fill="currentColor"/></svg>
     </button>
+    <span id="floppy-group" class="floppy-group hidden">
+      <button class="cbtn txt" data-cmd="floppy-prev" title="Previous floppy" aria-label="Previous floppy">◀</button>
+      <span id="floppy-count" class="floppy-count">1/1</span>
+      <button class="cbtn txt" data-cmd="floppy-next" title="Next floppy" aria-label="Next floppy">▶</button>
+    </span>
     <button class="cbtn" data-cmd="snapshot" title="Take snapshot" aria-label="Snapshot">
       <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4">
         <path d="M2.6 5.6h2.1l1-1.6h4.6l1 1.6h2.1v7H2.6z"/><circle cx="8" cy="8.9" r="2.3"/>

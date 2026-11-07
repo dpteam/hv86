@@ -400,6 +400,7 @@
 
         byId("newPresetHint").textContent = preset
             ? (preset.description || "") +
+              (preset.floppy_set ? " " + T("new.floppySet").replace("{n}", preset.floppy_count || 0) : "") +
               (preset.source === "copy.sh" ? " " + T("new.copyNote") : "") +
               (preset.source === "old-dos.ru" ? " " + T("new.oldDosNote") : "")
             : T("new.noPresetHint");

@@ -94,6 +94,22 @@ namespace Hv86.Vm
         /// </summary>
         public static string EnsureLocalFile(Dictionary<string, object> preset)
         {
+            List<string> files = EnsureLocalFiles(preset);
+
+            return files.Count > 0 ? files[0] : null;
+        }
+
+        /// <summary>
+        /// То же, но для комплекта дискет: возвращает все образы по порядку.
+        /// Один образ - один элемент списка.
+        /// </summary>
+        public static List<string> EnsureLocalFiles(Dictionary<string, object> preset)
+        {
+            return ImagePack.UnwrapSet(EnsureArchive(preset));
+        }
+
+        private static string EnsureArchive(Dictionary<string, object> preset)
+        {
             if (preset == null) throw new Hv86Exception("пресет не найден");
 
             string id = Json.GetString(preset, "id", "");
@@ -116,7 +132,7 @@ namespace Hv86.Vm
             {
                 if (!string.IsNullOrEmpty(expected))
                 {
-                    if (Matches(path, expected)) return ImagePack.Unwrap(path);
+                    if (Matches(path, expected)) return path;
 
                     Log.Warn("PRESET", "хэш кэша не совпал, качаю заново: " + fileName);
                     try { File.Delete(path); } catch { }
@@ -126,7 +142,7 @@ namespace Hv86.Vm
                     string pinned = ReadPinned(path);
 
                     // хэш закрепили при первой загрузке - дальше сверяем его
-                    if (pinned.Length == 0 || Matches(path, pinned)) return ImagePack.Unwrap(path);
+                    if (pinned.Length == 0 || Matches(path, pinned)) return path;
 
                     Log.Warn("PRESET", "образ изменился с первой загрузки, качаю заново: " + fileName);
                     try { File.Delete(path); } catch { }
@@ -166,9 +182,9 @@ namespace Hv86.Vm
                 AtomicFile.Move(temp, path);
                 Log.Info("PRESET", "образ готов: " + path);
 
-                // старые каталоги отдают ZIP с образом внутри: распаковываем,
-                // иначе ВМ получит архив вместо диска и не загрузится
-                return ImagePack.Unwrap(path);
+                // распаковка - в EnsureLocalFiles: там решается, один это
+                // образ или комплект дискет
+                return path;
             }
             catch (Hv86Exception)
             {

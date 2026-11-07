@@ -209,6 +209,22 @@ namespace Hv86.App
                 if (capture.Length > 0) Ok("mouse capture setting", "release chord: " + capture);
                 else Fail("capture release mode did not reach the console page: " + Json.Stringify(fontProbe));
 
+                // дискеты: у обычной ВМ набор из одной - кнопки листания скрыты
+                if (Json.GetInt(fontProbe, "floppyCount", -1) == 0 &&
+                    !Json.GetBool(fontProbe, "floppyVisible", false))
+                    Ok("floppy set state", "single diskette, flip buttons hidden");
+                else
+                    Fail("floppy state did not reach the page: " + Json.Stringify(fontProbe));
+
+                // смена дискеты у ВМ без набора - понятный отказ, а не тишина
+                bool floppyRefused = false;
+
+                try { Call(client, "vm.floppy", Json.Obj("id", id, "delta", 1), 15000); }
+                catch (Exception) { floppyRefused = true; }
+
+                if (floppyRefused) Ok("vm.floppy without a set", "refused with a message");
+                else Fail("vm.floppy without a set did not fail");
+
                 Call(client, "vm.update", Json.Obj("id", id,
                     "text_font", "", "text_font_size", 0), 30000);
 

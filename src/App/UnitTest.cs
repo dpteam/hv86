@@ -431,6 +431,52 @@ namespace Hv86.App
             // 5. Обычный образ - как есть
             Check(ImagePack.Detect(floppy) == ImagePack.KindRaw &&
                   ImagePack.Unwrap(floppy) == floppy, "pack: raw image is used as is");
+
+            // 6. Набор дискет: все образы по порядку, а не "какой брать"
+            List<string> set = ImagePack.UnwrapSet(twoPath);
+
+            Check(set.Count == 2 && File.Exists(set[0]) && File.Exists(set[1]),
+                "pack: set of 2 floppies is unwrapped");
+
+            Check(set[0].EndsWith("two-a.img", StringComparison.OrdinalIgnoreCase) &&
+                  set[1].EndsWith("two-b.img", StringComparison.OrdinalIgnoreCase),
+                "pack: set keeps archive order");
+
+            // 7. Порядок дискет естественный: disk2 раньше disk10
+            string manyPath = Path.Combine(pack, "many.zip");
+
+            using (System.IO.Compression.ZipArchive zip =
+                   System.IO.Compression.ZipFile.Open(manyPath, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                zip.CreateEntryFromFile(floppy, "disk10.img");
+                zip.CreateEntryFromFile(floppy, "disk2.img");
+                zip.CreateEntryFromFile(floppy, "disk1.img");
+            }
+
+            List<string> many = ImagePack.UnwrapSet(manyPath);
+
+            Check(many.Count == 3 &&
+                  many[0].EndsWith("disk1.img", StringComparison.OrdinalIgnoreCase) &&
+                  many[1].EndsWith("disk2.img", StringComparison.OrdinalIgnoreCase) &&
+                  many[2].EndsWith("disk10.img", StringComparison.OrdinalIgnoreCase),
+                "pack: set is sorted naturally (disk1, disk2, disk10)");
+
+            // 8. Комплект переживает запись и чтение vm.json
+            VmDefinition vm = new VmDefinition();
+            vm.Id = "settest";
+            vm.HdaFile = null;
+            vm.FdaFile = many[0];
+            vm.FdaSet = many;
+            vm.FdaIndex = 1;
+
+            VmDefinition back = VmDefinition.FromDict(vm.ToDict());
+
+            Check(back.FdaSet.Count == 3 && back.FdaIndex == 1 &&
+                  back.FdaFile == many[1],
+                "pack: floppy set survives vm.json round-trip");
+            Check(Json.GetInt(back.ToView(), "floppy_count", 0) == 3 &&
+                  Json.GetInt(back.ToView(), "floppy_index", -1) == 1,
+                "pack: view reports floppy set size and position");
         }
 
         private static void TestShare(string dir)

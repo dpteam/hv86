@@ -51,10 +51,13 @@
   остановке; при падении образ остаётся целым, ВМ откатывается к чекпоинту.
 - **Пресеты**: свои проверенные (FreeDOS, KolibriOS, Oberon, TinyCore, Linux), весь
   каталог демо-стенда **copy.sh/v86** (118 систем) и отобранные вручную образы с
-  **old-dos.ru** (MS-DOS, DR-DOS, Windows 3.x, OS/2, CP/M, Xenix…). Образы качаются
+  **old-dos.ru** (MS-DOS, PC DOS, DR-DOS, CP/M, Xenix…). Образы качаются
   по требованию, в репозиторий не кладутся; скачанное проверяется по SHA-256
   (у внешних каталогов хэш закрепляется при первой загрузке). ZIP с образом внутри
   распаковывается на месте, RAR/7z честно отказывают.
+- **Комплекты дискет**: если в архиве несколько дискет (установочные MS-DOS/PC DOS),
+  ВМ создаётся со всем набором, а в консоли появляются «◀ 2/5 ▶» — переставить
+  дискету можно и у работающего гостя (`vm.floppy`, `hv86 --cli floppy <vm> next`).
 
 ## Быстрый старт
 
@@ -106,6 +109,7 @@ hv86 --cli snapshot dev before-update
 hv86 --cli snapshots dev
 hv86 --cli revert dev 0001-before-update
 hv86 --cli type dev "dir" --enter
+hv86 --cli floppy dev next     :: следующая дискета комплекта
 hv86 --cli screen dev            :: текст с экрана (только headless-движок)
 hv86 --cli stop dev
 hv86 --cli export dev D:\backup\dev.hv86x

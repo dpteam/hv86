@@ -66,6 +66,7 @@ namespace Hv86.VmHost
         private TaskCompletionSource<bool> _typeWait;
         private TaskCompletionSource<Dictionary<string, object>> _fetchProbe;
         private TaskCompletionSource<Dictionary<string, object>> _scaleProbe;
+        private TaskCompletionSource<Dictionary<string, object>> _screenProbe;
         private bool _promoted;
 
         private sealed class PendingSave
@@ -323,6 +324,10 @@ namespace Hv86.VmHost
                     _xhrProbe?.TrySetResult(message);
                     break;
 
+                case "screenResult":
+                    _screenProbe?.TrySetResult(message);
+                    break;
+
                 case "restoreDone":
                     _restoreWait?.TrySetResult(Json.GetBool(message, "ok", false));
                     if (!Json.GetBool(message, "ok", false))
@@ -379,6 +384,16 @@ namespace Hv86.VmHost
                     Task.Run(() => DetachAsync("cdrom"));
                     break;
 
+                // листание комплекта дискет: менять vm.json может только
+                // служба, поэтому просим её, а она пришлёт vm.floppy назад
+                case "floppy-prev":
+                    ChangeFloppyViaService(-1);
+                    break;
+
+                case "floppy-next":
+                    ChangeFloppyViaService(1);
+                    break;
+
                 case "snapshot":
                     Task.Run(async () =>
                     {
@@ -424,6 +439,37 @@ namespace Hv86.VmHost
                 {
                     Log.Error("VMHOST", "запуск через службу: " + ex.Message);
                     Broadcast("vm.error", Json.Obj("id", _vmId, "message", ex.Message));
+                }
+            });
+        }
+
+        /// <summary>
+        /// Листает комплект дискет через службу: она владеет vm.json и
+        /// пришлёт обратно vm.floppy с выбранным образом.
+        /// </summary>
+        private void ChangeFloppyViaService(int delta)
+        {
+            Task.Run(async delegate
+            {
+                try
+                {
+                    using (PipeClient client = new PipeClient(PipeNames.Service))
+                    {
+                        if (!await client.ConnectAsync(5000).ConfigureAwait(false))
+                        {
+                            Broadcast("vm.toast", Json.Obj("id", _vmId,
+                                "text", "служба не отвечает: дискету не сменить", "kind", "bad"));
+                            return;
+                        }
+
+                        await client.CallForResultAsync("vm.floppy",
+                            Json.Obj("id", _vmId, "delta", delta), 30000).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("MEDIA", "смена дискеты: " + ex.Message);
+                    Broadcast("vm.toast", Json.Obj("id", _vmId, "text", ex.Message, "kind", "bad"));
                 }
             });
         }
@@ -474,6 +520,11 @@ namespace Hv86.VmHost
 
             Dictionary<string, object> fda = MediaDescriptor(_vm.FdaPath);
             if (fda != null) config["fda"] = fda;
+
+            // набор дискет: странице нужно знать, сколько их и какая вставлена,
+            // чтобы показать «дискета 2/5» и кнопки листания
+            config["floppyCount"] = _vm.FdaSet == null ? 0 : _vm.FdaSet.Count;
+            config["floppyIndex"] = _vm.FdaIndex;
 
             if (_stateFiles.ContainsKey("restore.bin"))
                 config["initialState"] = VmResourceServer.Origin + "/state/restore.bin";
@@ -764,6 +815,44 @@ namespace Hv86.VmHost
             Log.Info("MEDIA", "вставлен " + target);
         }
 
+        /// <summary>
+        /// Вставляет дискету из комплекта: служба уже выбрала, какая (она
+        /// владеет vm.json), здесь только подключение образа к эмулятору.
+        /// </summary>
+        private object SetFloppy(string path, int index)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                throw new Hv86Exception("дискета не найдена: " + path);
+
+            int count;
+            int position;
+
+            lock (_gate)
+            {
+                _vm.FdaFile = Paths.Relative(_vm.Id, path);
+
+                count = _vm.FdaSet == null ? 0 : _vm.FdaSet.Count;
+                position = index >= 0 && index < count ? index : 0;
+                _vm.FdaIndex = position;
+
+                // vm.json не пишем: им владеет служба, она уже сохранила
+                // новый индекс. Здесь достаточно памяти - иначе мы бы
+                // затёрли поля, которые меняет только служба (state, restarts).
+            }
+
+            _form.Post(Json.Obj(
+                "action", "attach",
+                "kind", "fda",
+                "url", "/media/fda?v=" + DateTime.UtcNow.Ticks,
+                "size", new FileInfo(path).Length,
+                "index", position,
+                "count", count));
+
+            Log.Info("MEDIA", "дискета " + (position + 1) + "/" + count + ": " + Path.GetFileName(path));
+
+            return Json.Obj("index", position, "count", count);
+        }
+
         private async Task DetachAsync(string kind)
         {
             string slot = kind == "fda" ? "fda" : "cdrom";
@@ -963,6 +1052,10 @@ namespace Hv86.VmHost
                         Json.GetString(parameters, "kind", "cdrom")).ConfigureAwait(false);
                     return Json.Obj("ok", true);
 
+                case "vm.floppy":
+                    return SetFloppy(Json.GetString(parameters, "path", ""),
+                        Json.GetInt(parameters, "index", -1));
+
                 case "vm.forwards":
                 {
                     int dropped;
@@ -1113,6 +1206,18 @@ namespace Hv86.VmHost
 
                     return await probe.Task.ConfigureAwait(false);
                 }
+
+                // диагностика: что видно на экране гостя (текстовый режим).
+                // Нужна, чтобы отличать «гость загрузился» от «BIOS ругается
+                // на незагрузочный диск» - по счётчику инструкций это не видно.
+                case "vm.debug.screen":
+                {
+                    Dictionary<string, object> screen = await ProbeScreenAsync().ConfigureAwait(false);
+
+                    if (screen == null) throw new Hv86Exception("страница не ответила на screen-пробу");
+
+                    return screen;
+                }
             }
 
             throw new Hv86Exception("неизвестный метод: " + method);
@@ -1229,6 +1334,54 @@ namespace Hv86.VmHost
         // ----------------------------------------------------------------- smoke
 
         /// <summary>
+        /// Спрашивает страницу, что на экране. null - страница не ответила.
+        /// </summary>
+        private async Task<Dictionary<string, object>> ProbeScreenAsync()
+        {
+            TaskCompletionSource<Dictionary<string, object>> probe =
+                new TaskCompletionSource<Dictionary<string, object>>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+
+            _screenProbe = probe;
+            _form.Post(Json.Obj("action", "screenProbe"));
+
+            Task finished = await Task.WhenAny(probe.Task, Task.Delay(5000)).ConfigureAwait(true);
+            _screenProbe = null;
+
+            if (finished != probe.Task) return null;
+
+            return await probe.Task.ConfigureAwait(true);
+        }
+
+        /// <summary>
+        /// Сообщения BIOS/загрузчика о том, что система не загрузилась. Гость
+        /// при этом продолжает крутиться (int 19 по кругу), поэтому по счётчику
+        /// инструкций сбой не виден - виден только по тексту на экране.
+        /// </summary>
+        private static bool LooksLikeBootFailure(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+
+            string[] markers =
+            {
+                "non-system disk", "non-system or disk error", "invalid system disk",
+                "operating system not found", "missing operating system", "no bootable",
+                "not a bootable disk", "disk i/o error", "error loading operating system",
+                "boot failure", "no os found",
+                // WinImage пишет это в загрузочный сектор при форматировании:
+                // такая дискета данных не грузится, даже если файлы на ней есть
+                "disk formatted with winimage", "this disk is not bootable"
+            };
+
+            string lower = text.ToLowerInvariant();
+
+            foreach (string marker in markers)
+                if (lower.IndexOf(marker, StringComparison.Ordinal) >= 0) return true;
+
+            return false;
+        }
+
+        /// <summary>
         /// Самотест: загрузка гостя → state → перезапуск из state → рост
         /// счётчика инструкций. Проверяет всю цепочку сразу: WebView2, v86,
         /// отдачу образов по Range, приём state кусками и восстановление.
@@ -1248,6 +1401,45 @@ namespace Hv86.VmHost
 
             long before = _instructions;
             Log.Info("SMOKE", "гость исполняет: " + _instructions + " инструкций, " + _mips + " MIPS");
+
+            // что на экране: счётчик инструкций не отличает загрузку от
+            // «BIOS не нашёл систему» - там гость тоже крутится, только зря.
+            // Медленные загрузчики печатают своё уже после SeaBIOS, поэтому
+            // смотрим до трёх раз, пока на экране всё ещё только BIOS.
+            string flat = "";
+            bool graphics = false;
+
+            for (int attempt = 0; attempt < 8; attempt++)
+            {
+                Dictionary<string, object> screen = await ProbeScreenAsync().ConfigureAwait(true);
+
+                // страница не ответила - спрашивать дальше нечего
+                if (screen == null) break;
+
+                flat = (Json.GetString(screen, "text", ""))
+                    .Replace("\r", " ").Replace("\n", " ").Trim();
+
+                graphics = Json.GetBool(screen, "graphics", false);
+
+                if (flat.Length > 200) flat = flat.Substring(0, 200);
+
+                if (LooksLikeBootFailure(flat))
+                {
+                    Log.Error("SMOKE", "гость не загрузился: " + flat);
+                    FinishSmoke(1);
+                    return;
+                }
+
+                bool biosOnly = flat.Length == 0 ||
+                    flat.IndexOf("SeaBIOS", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                if (!biosOnly) break;
+
+                await Task.Delay(700).ConfigureAwait(true);
+            }
+
+            Log.Info("SMOKE", (flat.Length > 0 ? "экран: " + flat : "экран: пусто") +
+                (graphics ? " · гостевой видеорежим (графика)" : ""));
 
             string statePath = Path.Combine(Paths.Root, "smoke-state.bin");
 

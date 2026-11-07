@@ -1,0 +1,21 @@
+{
+  "note": "Ручной отбор образов old-dos.ru. download - id файла на сайте, id - суффикс пресета (olddos-<id>). Собирается в assets/presets-olddos.json командой: node tools/old-dos-build.mjs <scan.json> tools/old-dos-curated.json assets/presets-olddos.json. Каждая запись должна иметь вердикт usable (один образ) или usable-set (комплект дискет) и пройти boot-проверку (tools/old-dos-smoke.mjs): загрузочная дискета 1 печатает своё, а не «Non-System disk».",
+  "presets": [
+    { "download": 3687, "id": "pcdos110", "name": "IBM PC DOS 1.10 (1982)", "kind": "fda", "memory_mb": 32, "note": "PC DOS 1.10 на дискете 160K, 1982. Грузится, спрашивает дату." },
+    { "download": 4029, "id": "msdos401", "name": "MS-DOS 4.01 (boot disk, 1989)", "kind": "fda", "memory_mb": 32, "note": "Загрузочная дискета MS-DOS 4.01, апрель 1989." },
+    { "download": 13779, "id": "cpm86", "name": "CP/M-86 1.0 (1982)", "kind": "fda", "memory_mb": 32, "note": "CP/M-86 1.0 на дискете 160K, 1982: загружается до приглашения A>." },
+    { "download": 13318, "id": "venix", "name": "Venix/86 2.1 (1984)", "kind": "fda", "memory_mb": 32, "note": "Venix/86 2.1 - Unix для PC от VenturCom, 1984." },
+    { "download": 39065, "id": "dosc", "name": "DOS-C 0.90 (1995)", "kind": "fda", "memory_mb": 32, "note": "DOS-C 0.90 - свободная реализация DOS; грузится до A:\\>." },
+    { "download": 13472, "id": "retrounix", "name": "Retro UNIX 386 1.1", "kind": "fda", "memory_mb": 32, "note": "Retro UNIX 386 v1 - Unix для 8086/386, грузится в приглашение Boot:." },
+
+    { "download": 3678, "id": "pcdos502", "name": "IBM PC DOS 5.02 (3 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "Установочный комплект PC DOS 5.02, 1991, английский. Дискета 1 печатает «IBM DOS Version 5.02». Диск 64 МБ добавлен, чтобы систему можно было поставить." },
+    { "download": 785, "id": "msdos500", "name": "MS-DOS 5.00a (3×720K)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "MS-DOS 5.00a на трёх дискетах 720K, английский. Дискета 1 печатает «Microsoft(R) MS-DOS(R) Version 5.00»." },
+    { "download": 27857, "id": "msdos600", "name": "MS-DOS 6.0 (4 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "MS-DOS 6.0, английский. Загружается в «Microsoft MS-DOS 6 Setup»." },
+    { "download": 3878, "id": "msdos620", "name": "MS-DOS 6.20 (3 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "MS-DOS 6.20, английский. Загружается в «Microsoft MS-DOS 6.2 Setup»." },
+    { "download": 3866, "id": "msdos622", "name": "MS-DOS 6.22 (4 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "MS-DOS 6.22, английский. Загружается в «Microsoft MS-DOS 6.22 Setup»." },
+    { "download": 3689, "id": "pcdos610", "name": "IBM PC DOS 6.10 (4 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "PC DOS 6.10, английский. Дискета 1 рисует заставку установщика." },
+    { "download": 3991, "id": "pcdos630", "name": "IBM PC DOS 6.30 (5 дискет)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "PC DOS 6.30, английский. Загружается в «PC DOS 6.3 Setup»." },
+    { "download": 13036, "id": "concurrentdos", "name": "Concurrent DOS 2.0 (2 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "Concurrent DOS 2.0 (Digital Research), английский. Многозадачная DOS, дискета 1 рисует своё меню." },
+    { "download": 12858, "id": "pcmos102", "name": "PC-MOS/386 1.02 (2 дискеты)", "kind": "fda", "memory_mb": 32, "disk_mb": 64, "note": "PC-MOS/386 1.02 - многопользовательская DOS для 386, английский. Дискета 1 рисует заставку установщика." }
+  ]
+}

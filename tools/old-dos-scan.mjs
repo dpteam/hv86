@@ -57,7 +57,15 @@ function zipEntries(buffer) {
     if (end < 0) return null;
 
     const count = buffer.readUInt16LE(end + 10);
-    let offset = buffer.readUInt32LE(end + 16);
+
+    // В EOCD лежит АБСОЛЮТНОЕ смещение каталога в файле, а buffer - только
+    // хвост. Раньше смещение использовалось как есть, и для архивов больше
+    // хвоста каталог "не читался": наборы дискет выглядели как "no image
+    // inside". Каталог всегда кончается там, где начинается EOCD.
+    const cdSize = buffer.readUInt32LE(end + 12);
+    let offset = end - cdSize;
+
+    if (offset < 0) return null;
 
     const entries = [];
 
@@ -152,7 +160,19 @@ for (const file of candidates) {
                 record.verdict = "no image inside";
             }
             else {
-                record.verdict = "set: " + images.length + " images";
+                // Набор дискет (установочные диски DOS): в архиве несколько
+                // образов. Годится, только если ВСЕ они - дискеты. Набор из
+                // образов разных типов (или жёстких дисков) - не наш случай.
+                const kinds = images.map((e) => kindOf(e.name, e.size));
+
+                if (kinds.every((k) => k === "fda")) {
+                    record.verdict = "usable-set";
+                    record.kind = "fda";
+                    record.images = images;
+                } else {
+                    record.verdict = "set: " + images.length + " images (" +
+                        Array.from(new Set(kinds.map((k) => k || "?"))).join("+") + ")";
+                }
             }
         }
         else {
@@ -172,16 +192,20 @@ for (const file of candidates) {
 
 fs.writeFileSync(outPath, JSON.stringify(result, null, 1), "utf8");
 
-const usable = result.filter((r) => r.verdict === "usable");
+const usable = result.filter((r) => r.verdict === "usable" || r.verdict === "usable-set");
 const formats = new Map();
 for (const r of result) formats.set(r.format, (formats.get(r.format) || 0) + 1);
 
 console.log("");
 console.log("formats: " + [...formats].map(([f, c]) => f + "=" + c).join(", "));
-console.log("usable: " + usable.length + " of " + result.length);
+console.log("usable: " + usable.length + " of " + result.length +
+    " (наборов дискет: " + result.filter((r) => r.verdict === "usable-set").length + ")");
 
 for (const r of usable) {
+    const size = r.verdict === "usable-set"
+        ? (r.images || []).reduce((sum, e) => sum + e.size, 0) + " in " + r.images.length
+        : Math.round((r.image ? r.image.size : r.bytes) / 1024) + "K";
+
     console.log("  " + String(r.download).padStart(7) + "  " + r.kind.padEnd(6) +
-        String(Math.round((r.image ? r.image.size : r.bytes) / 1024) + "K").padStart(9) + "  " +
-        r.entryName.slice(0, 40));
+        String(size).padStart(9) + "  " + r.entryName.slice(0, 40));
 }

@@ -99,6 +99,107 @@ namespace Hv86.Vm
             return UnzipImage(file);
         }
 
+        /// <summary>
+        /// Все образы из файла по порядку: одиночный образ - один элемент,
+        /// ZIP с комплектом дискет - сколько внутри. Комплект нужен, чтобы
+        /// можно было «вставить следующую дискету» в консоли.
+        /// </summary>
+        public static List<string> UnwrapSet(string file)
+        {
+            List<string> result = new List<string>();
+
+            string kind = Detect(file);
+
+            if (kind == KindRar || kind == KindSevenZip)
+                throw new Hv86Exception("образ упакован в " + kind.ToUpperInvariant() +
+                                        ": этот формат не поддерживается, распакуйте вручную и подключите файлом");
+
+            if (kind != KindZip)
+            {
+                result.Add(file);
+                return result;
+            }
+
+            try
+            {
+                using (ZipArchive zip = ZipFile.OpenRead(file))
+                {
+                    List<ZipArchiveEntry> images = zip.Entries
+                        .Where(e => e.Length > 0 && e.FullName.IndexOf('/') < 0 && e.FullName.IndexOf('\\') < 0)
+                        .Where(e => Array.IndexOf(ImageExtensions, Path.GetExtension(e.Name).ToLowerInvariant()) >= 0)
+                        .ToList();
+
+                    if (images.Count == 0)
+                        throw new Hv86Exception("в архиве нет образов: " + Path.GetFileName(file));
+
+                    // порядок важен: диск 1 должен грузиться первым
+                    images.Sort((a, b) => NaturalCompare(a.Name, b.Name));
+
+                    string dir = Path.GetDirectoryName(file) ?? ".";
+
+                    foreach (ZipArchiveEntry entry in images)
+                    {
+                        string target = Path.Combine(dir,
+                            Path.GetFileNameWithoutExtension(file) + "-" + entry.Name);
+
+                        if (!File.Exists(target))
+                        {
+                            using (Stream source = entry.Open())
+                            using (FileStream destination = new FileStream(target, FileMode.Create,
+                                       FileAccess.Write, FileShare.Read))
+                            {
+                                source.CopyTo(destination);
+                            }
+                        }
+
+                        result.Add(target);
+                    }
+
+                    Log.Info("PRESET", "образов в архиве: " + images.Count + " (" + Path.GetFileName(file) + ")");
+                    return result;
+                }
+            }
+            catch (Hv86Exception)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new Hv86Exception("не удалось разобрать архив " + Path.GetFileName(file) + ": " + ex.Message);
+            }
+        }
+
+        /// <summary>Сравнение имён с числами: disk2 раньше disk10.</summary>
+        private static int NaturalCompare(string a, string b)
+        {
+            int i = 0, j = 0;
+
+            while (i < a.Length && j < b.Length)
+            {
+                if (char.IsDigit(a[i]) && char.IsDigit(b[j]))
+                {
+                    int startA = i, startB = j;
+
+                    while (i < a.Length && char.IsDigit(a[i])) i++;
+                    while (j < b.Length && char.IsDigit(b[j])) j++;
+
+                    long valueA, valueB;
+                    bool okA = long.TryParse(a.Substring(startA, i - startA), out valueA);
+                    bool okB = long.TryParse(b.Substring(startB, j - startB), out valueB);
+
+                    if (okA && okB && valueA != valueB) return valueA < valueB ? -1 : 1;
+                    continue;
+                }
+
+                if (a[i] != b[j]) return char.ToLowerInvariant(a[i]) < char.ToLowerInvariant(b[j]) ? -1 : 1;
+
+                i++;
+                j++;
+            }
+
+            return a.Length.CompareTo(b.Length);
+        }
+
         private static string UnzipImage(string archive)
         {
             try

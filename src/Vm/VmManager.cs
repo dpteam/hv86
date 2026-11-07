@@ -211,13 +211,15 @@ namespace Hv86.Vm
             string isoPath = Json.GetString(parameters, "iso_path", "");
 
             Dictionary<string, object> preset = PresetCatalog.Get(presetId);
-            string presetFile = null;
+            List<string> presetFiles = new List<string>();
 
             if (preset != null)
             {
                 Dictionary<string, object> captured = preset;
-                presetFile = await Task.Run(() => PresetCatalog.EnsureLocalFile(captured)).ConfigureAwait(false);
+                presetFiles = await Task.Run(() => PresetCatalog.EnsureLocalFiles(captured)).ConfigureAwait(false);
             }
+
+            string presetFile = presetFiles.Count > 0 ? presetFiles[0] : null;
 
             int memoryMb = Json.GetInt(parameters, "memory_mb", 0);
             if (memoryMb <= 0) memoryMb = preset == null ? 128 : Json.GetInt(preset, "memory_mb", 128);
@@ -263,31 +265,49 @@ namespace Hv86.Vm
             {
                 if (presetFile != null)
                 {
-                    string ext = Path.GetExtension(presetFile).ToLowerInvariant();
-
-                    // каталоги отдают файлы через dl.php?id=... - расширение
-                    // в пути ничего не значит, ориентируемся на сигнатуру
-                    if (ext != ".img" && ext != ".iso" && ext != ".ima" && ext != ".flp" &&
-                        ext != ".vfd" && ext != ".dsk" && ext != ".raw" && ext != ".bin" && ext != ".hdd")
-                        ext = ImagePack.Detect(presetFile) == ImagePack.KindIso ? ".iso" : ".img";
-
-                    if (kind == "fda")
+                    if (kind == "fda" && presetFiles.Count > 1)
                     {
-                        string target = Path.Combine(Paths.VmMediaDir(vm.Id), "floppy" + ext);
-                        File.Copy(presetFile, target, true);
-                        vm.FdaFile = Paths.Relative(vm.Id, target);
-                    }
-                    else if (kind == "hda")
-                    {
-                        string target = Path.Combine(Paths.VmDisksDir(vm.Id), "system" + ext);
-                        File.Copy(presetFile, target, true);
-                        vm.HdaFile = Paths.Relative(vm.Id, target);
+                        // комплект дискет (установочные диски DOS): все образы
+                        // лежат рядом, в консоли можно «вставить следующую»
+                        vm.FdaSet = new List<string>();
+
+                        for (int i = 0; i < presetFiles.Count; i++)
+                        {
+                            string partExt = ImageExtension(presetFiles[i]);
+                            string part = Path.Combine(Paths.VmMediaDir(vm.Id),
+                                "floppy-" + (i + 1) + partExt);
+
+                            File.Copy(presetFiles[i], part, true);
+                            vm.FdaSet.Add(Paths.Relative(vm.Id, part));
+                        }
+
+                        vm.FdaIndex = 0;
+                        vm.FdaFile = vm.FdaSet[0];
+
+                        Log.Info("VM", "набор дискет: " + vm.FdaSet.Count + " шт");
                     }
                     else
                     {
-                        string target = Path.Combine(Paths.VmMediaDir(vm.Id), "boot" + ext);
-                        File.Copy(presetFile, target, true);
-                        vm.CdromFile = Paths.Relative(vm.Id, target);
+                        string ext = ImageExtension(presetFile);
+
+                        if (kind == "fda")
+                        {
+                            string target = Path.Combine(Paths.VmMediaDir(vm.Id), "floppy" + ext);
+                            File.Copy(presetFile, target, true);
+                            vm.FdaFile = Paths.Relative(vm.Id, target);
+                        }
+                        else if (kind == "hda")
+                        {
+                            string target = Path.Combine(Paths.VmDisksDir(vm.Id), "system" + ext);
+                            File.Copy(presetFile, target, true);
+                            vm.HdaFile = Paths.Relative(vm.Id, target);
+                        }
+                        else
+                        {
+                            string target = Path.Combine(Paths.VmMediaDir(vm.Id), "boot" + ext);
+                            File.Copy(presetFile, target, true);
+                            vm.CdromFile = Paths.Relative(vm.Id, target);
+                        }
                     }
                 }
 
@@ -773,7 +793,13 @@ namespace Hv86.Vm
 
             lock (_gate)
             {
-                if (kind == "fda") runtime.Def.FdaFile = Paths.Relative(id, target);
+                if (kind == "fda")
+                {
+                    // своя дискета заменяет комплект: листать набор больше нечего
+                    runtime.Def.FdaFile = Paths.Relative(id, target);
+                    runtime.Def.FdaSet = new List<string>();
+                    runtime.Def.FdaIndex = 0;
+                }
                 else runtime.Def.CdromFile = Paths.Relative(id, target);
 
                 VmStore.Save(runtime.Def);
@@ -809,6 +835,52 @@ namespace Hv86.Vm
             }
 
             Emit("vm.media", Json.Obj("id", id, "kind", kind, "file", ""));
+            return runtime.Def.ToView();
+        }
+
+        /// <summary>
+        /// Смена дискеты в комплекте. delta = +1/-1 листает по кругу,
+        /// index >= 0 вставляет конкретную. Дискета меняется и у работающей
+        /// ВМ: гость увидит новую вставку так же, как от настоящего привода.
+        /// </summary>
+        public async Task<object> FloppyAsync(string id, int delta, int index)
+        {
+            VmRuntime runtime = Get(id);
+
+            string path;
+            int position;
+            int count;
+            string fileName;
+
+            lock (_gate)
+            {
+                VmDefinition def = runtime.Def;
+
+                if (def.FdaSet == null || def.FdaSet.Count == 0)
+                    throw new Hv86Exception("у этой ВМ нет набора дискет");
+
+                count = def.FdaSet.Count;
+                position = index >= 0 ? index : def.FdaIndex + (delta == 0 ? 1 : delta);
+
+                // по кругу: после последней снова первая, как в 86box
+                position = ((position % count) + count) % count;
+
+                def.FdaIndex = position;
+                def.FdaFile = def.FdaSet[position];
+
+                VmStore.Save(def);
+
+                path = Paths.Absolute(id, def.FdaFile);
+                fileName = Path.GetFileName(def.FdaFile);
+            }
+
+            if (runtime.Proc != null && !runtime.Proc.HasExited)
+            {
+                await runtime.Proc.Client.CallForResultAsync("vm.floppy",
+                    Json.Obj("path", path, "index", position), 30000).ConfigureAwait(false);
+            }
+
+            Emit("vm.floppy", Json.Obj("id", id, "file", fileName, "index", position, "count", count));
             return runtime.Def.ToView();
         }
 
@@ -1730,6 +1802,22 @@ namespace Hv86.Vm
             int result = 16;
             while (result < value && result < 1024) result *= 2;
             return result;
+        }
+
+        /// <summary>
+        /// Расширение, под которым образ ляжет в каталог ВМ. Каталоги отдают
+        /// файлы через dl.php?id=... - расширение в пути ничего не значит,
+        /// поэтому ориентируемся на сигнатуру.
+        /// </summary>
+        private static string ImageExtension(string file)
+        {
+            string ext = Path.GetExtension(file).ToLowerInvariant();
+
+            if (ext != ".img" && ext != ".iso" && ext != ".ima" && ext != ".flp" &&
+                ext != ".vfd" && ext != ".dsk" && ext != ".raw" && ext != ".bin" && ext != ".hdd")
+                ext = ImagePack.Detect(file) == ImagePack.KindIso ? ".iso" : ".img";
+
+            return ext;
         }
 
         public void Dispose()

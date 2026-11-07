@@ -90,6 +90,7 @@
   "new.copyNote": "Image from the v86 demo stand: downloaded on create. If it does not boot, try more memory.",
   "new.sourceOldDos": "old-dos.ru catalog",
   "new.oldDosNote": "Curated from old-dos.ru: downloaded and unpacked on create (ZIP works, RAR/7z does not).",
+  "new.floppySet": "A set of {n} diskettes: flip them with ◀ ▶ in the console.",
   "new.needSource": "A preset or an image file is required",
   "new.creating": "Creating VM…",
 

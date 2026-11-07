@@ -7,8 +7,9 @@
 // curated.json  - ручной отбор: [{ "download": <id>, "id": "...", "name": "...",
 //                   "memory_mb": 32, "note": "..." }]
 //
-// Каждая запись должна быть с вердиктом "usable" - то есть один образ внутри.
-// Иначе скрипт падает: в каталог не должно попасть то, что не загрузится.
+// Каждая запись должна быть с вердиктом "usable" (один образ внутри) или
+// "usable-set" (комплект дискет). Иначе скрипт падает: в каталог не должно
+// попасть то, что не загрузится.
 import fs from "node:fs";
 
 const [, , scanPath, curatedPath, outPath] = process.argv;
@@ -19,7 +20,11 @@ if (!curatedPath || !outPath) {
 }
 
 const scan = JSON.parse(fs.readFileSync(scanPath, "utf8"));
-const curated = JSON.parse(fs.readFileSync(curatedPath, "utf8"));
+const curatedDoc = JSON.parse(fs.readFileSync(curatedPath, "utf8"));
+
+// отбор можно держать как массив или как {note, presets:[...]} - второй
+// вариант удобнее: заметка о том, как файл собирается, лежит рядом
+const curated = Array.isArray(curatedDoc) ? curatedDoc : (curatedDoc.presets || []);
 
 const byDownload = new Map();
 for (const item of scan) byDownload.set(Number(item.download), item);
@@ -31,13 +36,27 @@ for (const pick of curated) {
     const item = byDownload.get(Number(pick.download));
 
     if (!item) { errors.push("нет в скане: " + pick.download); continue; }
-    if (item.verdict !== "usable") { errors.push(pick.download + ": " + item.verdict); continue; }
 
-    const imageBytes = item.image ? item.image.size : item.bytes;
+    const isSet = item.verdict === "usable-set";
+
+    if (!isSet && item.verdict !== "usable") {
+        errors.push(pick.download + ": " + item.verdict);
+        continue;
+    }
+
+    const imageBytes = isSet
+        ? (item.images || []).reduce((sum, e) => sum + e.size, 0)
+        : (item.image ? item.image.size : item.bytes);
+
     const kind = pick.kind || item.kind;
 
     if (pick.kind && item.kind && pick.kind !== item.kind) {
         errors.push(pick.download + ": в файле " + item.kind + ", а в отборе " + pick.kind);
+        continue;
+    }
+
+    if (isSet && kind !== "fda") {
+        errors.push(pick.download + ": набор из образов не-дискет");
         continue;
     }
 
@@ -50,11 +69,16 @@ for (const pick of curated) {
         sha256: "",
         memory_mb: pick.memory_mb || (kind === "fda" ? 32 : 128),
         vga_memory_mb: pick.vga_memory_mb || 8,
-        disk_mb: 0,
+        disk_mb: pick.disk_mb || 0,
         boot: kind === "fda" ? "FLOPPY_CD_HARDDISK" :
               kind === "cdrom" ? "CD_HARDDISK_FLOPPY" : "HARDDISK_CD_FLOPPY",
         net: "ne2k",
-        description: [pick.note, "old-dos.ru", item.format, imageBytes ? Math.round(imageBytes / 1024) + "K" : ""]
+        // комплект дискет: консоль покажет «1/N» и кнопки листания
+        floppy_set: isSet,
+        floppy_count: isSet ? (item.images || []).length : 0,
+        description: [pick.note, "old-dos.ru", item.format,
+            imageBytes ? Math.round(imageBytes / 1024) + "K" : "",
+            isSet ? ("дискет: " + item.images.length) : ""]
             .filter(Boolean).join(" · ")
     });
 }
