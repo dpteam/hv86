@@ -89,8 +89,29 @@ namespace Hv86.Core
             while (File.Exists(target) || Directory.Exists(target))
                 target = Path.Combine(Paths.TrashDir, stamp + "-" + safeHint + "-" + (n++));
 
-            if (Directory.Exists(path)) Directory.Move(path, target);
+            if (Directory.Exists(path)) MoveDirectory(path, target);
             else File.Move(path, target);
+        }
+
+        /// <summary>
+        /// Перенос каталога в корзину. `Directory.Move` умеет только в пределах
+        /// тома, а корзина и данные вполне могут оказаться на разных дисках
+        /// (в CI так и было: %TEMP% на C:, RUNNER_TEMP на D:). Тогда копируем
+        /// и удаляем источник - данные уже лежат в корзине, терять нечего.
+        /// </summary>
+        private static void MoveDirectory(string from, string to)
+        {
+            try
+            {
+                Directory.Move(from, to);
+            }
+            catch (IOException)
+            {
+                CopyDirectory(from, to);
+                Directory.Delete(from, true);
+
+                Log.Info("TRASH", "каталог перенесён между томами: " + to);
+            }
         }
 
         public static void CopyDirectory(string from, string to)
