@@ -347,6 +347,18 @@
           </div>
         </div>
         <div class="hint" data-i18n="host.replicaHint">This host then accepts state from another hv86 (VM mode «remote»). Token must match on both sides; the listener needs the service and admin rights for a port on all interfaces.</div>
+
+        <div class="grid2" style="margin-top:8px">
+          <div>
+            <label data-i18n="host.witnessUrl">Witness URL (for this host)</label>
+            <input type="text" id="hostWitnessUrl" placeholder="http://192.168.1.30:8610">
+          </div>
+          <div>
+            <label data-i18n="host.witnessToken">Witness secret</label>
+            <input type="password" id="hostWitnessToken" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="hint" data-i18n="host.witnessHint">Used to validate leases of incoming states and to promote replicas automatically.</div>
       </div>
 
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
@@ -463,6 +475,23 @@
           </div>
         </div>
         <div class="hint" data-i18n="set.remoteHint">State is pushed to the other host every checkpoint; the base disk once per boot. Promotion there is manual (`hv86 --cli promote`). LAN only, no TLS.</div>
+
+        <div class="grid2" style="margin-top:8px">
+          <div>
+            <label data-i18n="set.leaseUrl">Witness URL (automatic failover)</label>
+            <input type="text" id="setLeaseUrl" placeholder="http://192.168.1.30:8610">
+          </div>
+          <div>
+            <label data-i18n="set.leaseToken">Witness secret</label>
+            <input type="password" id="setLeaseToken" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="hint" data-i18n="set.leaseHint">With a witness the VM holds a lease: if it cannot renew, it stops itself, and the replica takes over. Without a witness failover stays manual.</div>
+
+        <label style="display:flex; gap:8px; align-items:center; margin-top:8px">
+          <input type="checkbox" id="setAutoPromote">
+          <span data-i18n="set.autoPromote">Let the replica promote itself when the lease frees up</span>
+        </label>
       </div>
 
       <div class="field">

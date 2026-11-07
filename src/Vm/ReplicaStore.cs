@@ -319,9 +319,29 @@ namespace Hv86.Vm
                 "size", Json.GetLong(meta, "state_size", 0),
                 "age_sec", updated,
                 "warm", Json.GetLong(meta, "seq", 0) > 0,
+                "auto_promote", AutoPromote(meta),
                 "updated_utc", Json.GetString(meta, "updated_utc", ""));
 
             return view;
+        }
+
+        /// <summary>
+        /// Разрешён ли автоматический подъём этой реплики - решает основной хост,
+        /// он и кладёт флаг в присылаемое описание ВМ.
+        /// </summary>
+        private static bool AutoPromote(Dictionary<string, object> meta)
+        {
+            try
+            {
+                Dictionary<string, object> vm = Json.ParseObjectSafe(Json.GetString(meta, "vm_json", ""));
+                if (vm == null) return false;
+
+                return Json.GetBool(Json.GetObject(vm, "ft"), "auto_promote", false);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public void Delete(string vmId)

@@ -62,10 +62,23 @@ namespace Hv86.Vm
             public long RemoteSeq;
             public bool RemoteBusy;
 
+            // аренда у свидетеля: пока она жива, эта машина - единственный хозяин
+            public bool LeaseHeld;
+            public string LeaseToken = "";
+            public DateTime LeaseExpiresUtc;
+            public DateTime LeaseRenewUtc;
+            public string LeaseError = "";
+
             // окно, открытое для выключенной ВМ: гостя внутри нет, но к нему
             // можно подключиться (как в Hyper-V) и запустить оттуда
             public VmProcess Idle;
         }
+
+        /// <summary>TTL аренды у свидетеля, секунды (docs/replica-quorum.md).</summary>
+        private const int LeaseTtlSec = 12;
+
+        /// <summary>Как часто продлеваем аренду: три попытки до истечения.</summary>
+        private const int LeaseRenewSec = 4;
 
         public VmManager()
         {
@@ -411,7 +424,8 @@ namespace Hv86.Vm
 
         // --------------------------------------------------------------- запуск
 
-        public async Task<object> StartAsync(string id, bool showConsole, string restorePath, int relayPort = 0)
+        public async Task<object> StartAsync(string id, bool showConsole, string restorePath, int relayPort = 0,
+            string leaseToken = null)
         {
             VmRuntime runtime = Get(id);
 
@@ -419,6 +433,50 @@ namespace Hv86.Vm
             // Честнее отказать и объяснить, чем уронить гостя на первом откате.
             if (VmUpgrade.NeedsMigration(runtime.Def))
                 throw new Hv86Exception(VmUpgrade.Hint(runtime.Def));
+
+            // аренда у свидетеля: без неё запускаться нельзя - иначе две машины
+            // одновременно решат, что они главные (docs/replica-quorum.md).
+            // Токен может прийти снаружи: реплика уже выиграла аренду, повторный
+            // claim её же и не отдал бы.
+            if (!string.IsNullOrEmpty(leaseToken))
+            {
+                lock (_gate)
+                {
+                    runtime.LeaseHeld = true;
+                    runtime.LeaseToken = leaseToken;
+                    runtime.LeaseExpiresUtc = DateTime.UtcNow.AddSeconds(LeaseTtlSec);
+                    runtime.LeaseRenewUtc = DateTime.UtcNow.AddSeconds(LeaseRenewSec);
+                    runtime.LeaseError = "";
+                }
+
+                Log.Info("FT", "аренда " + id + " принята от реплики");
+            }
+            else if (!string.IsNullOrEmpty(runtime.Def.LeaseUrl))
+            {
+                Dictionary<string, object> lease = WitnessClient.ClaimAsync(
+                    runtime.Def.LeaseUrl, runtime.Def.LeaseToken, id, Environment.MachineName,
+                    LeaseTtlSec, 5000).GetAwaiter().GetResult();
+
+                if (!Json.GetBool(lease, "granted", false))
+                {
+                    string holder = Json.GetString(lease, "holder", "?");
+                    long left = Json.GetLong(lease, "expires_in_sec", 0);
+
+                    throw new Hv86Exception("ВМ уже ведёт другая машина (" + holder + ", аренда ещё " +
+                                            left + " с). Запуск запрещён: иначе будет split-brain");
+                }
+
+                lock (_gate)
+                {
+                    runtime.LeaseHeld = true;
+                    runtime.LeaseToken = Json.GetString(lease, "token", "");
+                    runtime.LeaseExpiresUtc = DateTime.UtcNow.AddSeconds(Json.GetInt(lease, "ttl_sec", LeaseTtlSec));
+                    runtime.LeaseRenewUtc = DateTime.UtcNow.AddSeconds(LeaseRenewSec);
+                    runtime.LeaseError = "";
+                }
+
+                Log.Info("FT", "аренда " + id + " получена, TTL " + LeaseTtlSec + " с");
+            }
 
             lock (_gate)
             {
@@ -624,6 +682,10 @@ namespace Hv86.Vm
                 CheckpointStore.ClearRing(runtime.Def);
                 lock (_gate) runtime.ConsecutiveFailures = 0;
             }
+
+            // ВМ встала штатно - аренда больше не нужна, пусть реплика
+            // подхватит сразу, а не через TTL
+            ReleaseLease(runtime);
 
             EmitState(runtime);
             return runtime.Def.ToView();
@@ -1023,6 +1085,35 @@ namespace Hv86.Vm
                 if (parameters.ContainsKey("replica_token"))
                     def.ReplicaToken = Json.GetString(parameters, "replica_token", "") ?? "";
 
+                if (parameters.ContainsKey("lease_url"))
+                {
+                    string url = (Json.GetString(parameters, "lease_url", "") ?? "").Trim();
+
+                    if (url != (def.LeaseUrl ?? ""))
+                    {
+                        if (url.Length > 0)
+                        {
+                            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                                throw new Hv86Exception("адрес свидетеля должен начинаться с http:// или https://");
+
+                            if (running || def.State != "stopped")
+                                throw new Hv86Exception("свидетеля подключают у остановленной ВМ: аренда берётся при старте");
+                        }
+
+                        def.LeaseUrl = url;
+                    }
+                }
+
+                if (parameters.ContainsKey("lease_token"))
+                    def.LeaseToken = Json.GetString(parameters, "lease_token", "") ?? "";
+
+                if (parameters.ContainsKey("auto_promote"))
+                    def.AutoPromote = Json.GetBool(parameters, "auto_promote", def.AutoPromote);
+
+                if (def.LeaseUrl.Length > 0 && def.LeaseToken.Length == 0)
+                    throw new Hv86Exception("для свидетеля нужен общий секрет (lease_token)");
+
                 if (def.FtMode == "remote" && def.ReplicaUrl.Length > 0 && def.ReplicaToken.Length == 0)
                     throw new Hv86Exception("для удалённой реплики нужен общий токен: без него она не примет состояние");
 
@@ -1185,7 +1276,7 @@ namespace Hv86.Vm
         /// Порт релея берётся из реплики - адрес wisp://127.0.0.1:&lt;порт&gt; уже
         /// записан в state, и гость после переключения должен найти сеть там же.
         /// </summary>
-        public async Task<object> PromoteReplicaAsync(string id)
+        public async Task<object> PromoteReplicaAsync(string id, string leaseToken = null)
         {
             ReplicaStore store = ReplicaStore.Default();
 
@@ -1243,7 +1334,7 @@ namespace Hv86.Vm
 
             try
             {
-                return await StartAsync(id, true, statePath, relayPort).ConfigureAwait(false);
+                return await StartAsync(id, true, statePath, relayPort, leaseToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -1337,6 +1428,38 @@ namespace Hv86.Vm
         private void TickOne(VmRuntime runtime)
         {
             VmDefinition def = runtime.Def;
+
+            // аренда: продлеваем и, если не успели, останавливаем ВМ. Это и есть
+            // fencing - лучше простой, чем два хозяина (docs/replica-quorum.md)
+            if (runtime.LeaseHeld)
+            {
+                if (DateTime.UtcNow > runtime.LeaseExpiresUtc)
+                {
+                    lock (_gate)
+                    {
+                        runtime.LeaseHeld = false;
+                        runtime.LeaseError = "аренда истекла";
+                    }
+
+                    Log.Error("FT", "аренда " + def.Id + " истекла: останавливаю ВМ (fencing)");
+
+                    Emit("ft.event", Json.Obj(
+                        "id", def.Id,
+                        "kind", "fenced",
+                        "text", "Аренда у свидетеля истекла: ВМ остановлена, чтобы не было двух хозяев",
+                        "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+
+                    Task.Run(async delegate
+                    {
+                        try { await StopAsync(def.Id, true).ConfigureAwait(false); }
+                        catch (Exception ex) { Log.Warn("FT", "остановка после fencing: " + ex.Message); }
+                    });
+
+                    return;
+                }
+
+                if (DateTime.UtcNow >= runtime.LeaseRenewUtc) RenewLease(runtime);
+            }
 
             // окно выключенной ВМ: процесс живёт сам по себе, и если закрылся -
             // просто забываем его, ВМ всё равно не запущена
@@ -1754,7 +1877,7 @@ namespace Hv86.Vm
                 try
                 {
                     Dictionary<string, object> result = await ReplicaClient.PutStateAsync(url, token, id, epoch,
-                        seq, statePath, 600000, runtime.RelayPort).ConfigureAwait(false);
+                        seq, statePath, 600000, runtime.RelayPort, runtime.LeaseToken).ConfigureAwait(false);
 
                     lock (_gate)
                     {
@@ -1783,6 +1906,81 @@ namespace Hv86.Vm
                 finally
                 {
                     lock (_gate) runtime.RemoteBusy = false;
+                }
+            });
+        }
+
+        /// <summary>
+        /// Продление аренды. Отправляем в фоне: сеть до свидетеля не должна
+        /// тормозить сторож. Неудача не смертельна - до истечения есть ещё
+        /// попытки, а факт истечения остановит ВМ.
+        /// </summary>
+        private void RenewLease(VmRuntime runtime)
+        {
+            string url = runtime.Def.LeaseUrl;
+            string secret = runtime.Def.LeaseToken;
+            string id = runtime.Def.Id;
+            string token;
+
+            lock (_gate)
+            {
+                token = runtime.LeaseToken;
+                runtime.LeaseRenewUtc = DateTime.UtcNow.AddSeconds(LeaseRenewSec);
+            }
+
+            if (string.IsNullOrEmpty(token)) return;
+
+            Task.Run(async delegate
+            {
+                try
+                {
+                    await WitnessClient.RenewAsync(url, secret, id, token, LeaseTtlSec, 5000).ConfigureAwait(false);
+
+                    lock (_gate)
+                    {
+                        runtime.LeaseExpiresUtc = DateTime.UtcNow.AddSeconds(LeaseTtlSec);
+                        runtime.LeaseError = "";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    lock (_gate) runtime.LeaseError = ex.Message;
+
+                    Log.Warn("FT", "аренда " + id + " не продлена: " + ex.Message);
+                }
+            });
+        }
+
+        /// <summary>Отпустить аренду при штатной остановке (best effort).</summary>
+        private void ReleaseLease(VmRuntime runtime)
+        {
+            string url = runtime.Def.LeaseUrl;
+            string secret = runtime.Def.LeaseToken;
+            string id = runtime.Def.Id;
+            string token;
+            bool held;
+
+            lock (_gate)
+            {
+                held = runtime.LeaseHeld;
+                token = runtime.LeaseToken;
+
+                runtime.LeaseHeld = false;
+                runtime.LeaseToken = "";
+            }
+
+            if (!held || string.IsNullOrEmpty(token)) return;
+
+            Task.Run(async delegate
+            {
+                try
+                {
+                    await WitnessClient.ReleaseAsync(url, secret, id, token, 5000).ConfigureAwait(false);
+                    Log.Info("FT", "аренда " + id + " отпущена");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("FT", "аренда " + id + " не отпущена: " + ex.Message);
                 }
             });
         }

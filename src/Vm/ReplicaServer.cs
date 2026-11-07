@@ -28,12 +28,14 @@ namespace Hv86.Vm
         private readonly string _token;
         private readonly int _port;
         private readonly bool _preferAll;
+        private readonly Func<string, string, bool> _leaseCheck;
 
         private HttpListener _listener;
         private CancellationTokenSource _cancel;
         private string _hostPrefix;
 
-        public ReplicaServer(ReplicaStore store, int port, string token, bool bindAll = true)
+        public ReplicaServer(ReplicaStore store, int port, string token, bool bindAll = true,
+            Func<string, string, bool> leaseCheck = null)
         {
             if (store == null) throw new Hv86Exception("хранилище реплик не задано");
             if (port <= 0 || port > 65535) throw new Hv86Exception("некорректный порт: " + port);
@@ -42,6 +44,7 @@ namespace Hv86.Vm
             _token = token ?? "";
             _port = port;
             _preferAll = bindAll;
+            _leaseCheck = leaseCheck;
 
             _hostPrefix = bindAll ? "+" : "localhost";
         }
@@ -210,6 +213,20 @@ namespace Hv86.Vm
                 if (path.EndsWith("/state", StringComparison.OrdinalIgnoreCase) && method == "PUT")
                 {
                     Dictionary<string, string> query = Query(context.Request.Url);
+
+                    // аренда: state от бывшего основного, чья аренда уже
+                    // передана, не должен затирать реплику (docs/replica-quorum.md)
+                    if (_leaseCheck != null)
+                    {
+                        string lease = Value(query, "lease");
+
+                        if (!_leaseCheck(Value(query, "vm"), lease))
+                        {
+                            await RespondAsync(context, 409, Json.Obj(
+                                "error", "аренда недействительна: состояние принято не будет")).ConfigureAwait(false);
+                            return;
+                        }
+                    }
 
                     bool duplicate;
                     Dictionary<string, object> meta = _store.PutState(

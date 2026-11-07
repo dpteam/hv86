@@ -69,6 +69,23 @@ namespace Hv86.Core
             set { Set("replica_token", value ?? ""); }
         }
 
+        /// <summary>
+        /// Адрес свидетеля (docs/replica-quorum.md). Нужен, чтобы этот хост
+        /// проверял аренду у принятых состояний и мог поднимать реплику сам.
+        /// </summary>
+        public static string WitnessUrl
+        {
+            get { return (string)Get("witness_url", "") ?? ""; }
+            set { Set("witness_url", value ?? ""); }
+        }
+
+        /// <summary>Общий секрет со свидетелем.</summary>
+        public static string WitnessToken
+        {
+            get { return (string)Get("witness_token", "") ?? ""; }
+            set { Set("witness_token", value ?? ""); }
+        }
+
         // ------------------------------------------------------------- хранение
 
         private static readonly object Gate = new object();
@@ -140,7 +157,9 @@ namespace Hv86.Core
                 "text_font_size", TextFontSize,
                 "capture_release", CaptureRelease,
                 "replica_port", ReplicaPort,
-                "replica_token", ReplicaToken);
+                "replica_token", ReplicaToken,
+                "witness_url", WitnessUrl,
+                "witness_token", WitnessToken);
         }
 
         public static Dictionary<string, object> Apply(Dictionary<string, object> parameters)
@@ -160,6 +179,12 @@ namespace Hv86.Core
 
                 if (parameters.ContainsKey("replica_token"))
                     ReplicaToken = Json.GetString(parameters, "replica_token", "");
+
+                if (parameters.ContainsKey("witness_url"))
+                    WitnessUrl = Json.GetString(parameters, "witness_url", "");
+
+                if (parameters.ContainsKey("witness_token"))
+                    WitnessToken = Json.GetString(parameters, "witness_token", "");
             }
 
             return View();

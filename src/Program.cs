@@ -8,6 +8,7 @@ using System.Text;
 using System.Windows.Forms;
 using Hv86.App;
 using Hv86.Core;
+using Hv86.Vm;
 using Hv86.VmHost;
 
 namespace Hv86
@@ -36,7 +37,7 @@ namespace Hv86
                         !HasFlag(args, "--selftest") && !HasFlag(args, "--version") &&
                         !HasFlag(args, "--itest") && !HasFlag(args, "--engine") &&
                         !HasFlag(args, "--unit") && !HasFlag(args, "--cli") && !HasFlag(args, "--ctl") &&
-                        !HasFlag(args, "--htest");
+                        !HasFlag(args, "--htest") && !HasFlag(args, "--witness");
 
             if (!isUi) ConsoleHelper.Attach();
 
@@ -78,6 +79,31 @@ namespace Hv86
                 if (!string.IsNullOrEmpty(relayText)) int.TryParse(relayText, out relayPort);
 
                 return new VmHostRunner(id, showConsole, restore, false, replica, relayPort, idle).Run();
+            }
+
+            // ----------------------------------------------- свидетель (третья сторона)
+            if (HasFlag(args, "--witness"))
+            {
+                Log.Role = "witness";
+                Log.MinLevel = LogLevel.Info;
+
+                string portText = NextTo(args, "--witness", "");
+                string secret = NextTo(args, "--witness-token", null);
+
+                int port;
+                if (!int.TryParse(portText, out port) || port <= 0 || port > 65535)
+                {
+                    Console.WriteLine("usage: hv86.exe --witness <порт> --witness-token <секрет>");
+                    return 2;
+                }
+
+                if (string.IsNullOrEmpty(secret))
+                {
+                    Console.WriteLine("нужен общий секрет: --witness-token <секрет> (тот же в lease_token ВМ)");
+                    return 2;
+                }
+
+                return RunWitness(port, secret);
             }
 
             // ------------------------------------------------------------ smoke
@@ -187,6 +213,42 @@ namespace Hv86
             }
 
             Log.Info("UI", "выход");
+            return 0;
+        }
+
+        /// <summary>
+        /// Свидетель: отдельный процесс, который выдаёт аренду одному хосту.
+        /// Стоять должен не на тех же двух машинах, иначе он не третья сторона.
+        /// </summary>
+        private static int RunWitness(int port, string secret)
+        {
+            using (WitnessServer server = new WitnessServer(WitnessStore.Default(), port, secret))
+            {
+                server.Start();
+
+                Console.WriteLine("hv86 witness on port " + port + ": " + server.BaseUrl);
+                Console.WriteLine("Press Enter to stop.");
+
+                try
+                {
+                    while (true)
+                    {
+                        if (Console.KeyAvailable)
+                        {
+                            Console.ReadKey(true);
+                            break;
+                        }
+
+                        System.Threading.Thread.Sleep(200);
+                    }
+                }
+                catch
+                {
+                    // нет консоли - работаем до внешней остановки
+                    System.Threading.Thread.Sleep(System.Threading.Timeout.Infinite);
+                }
+            }
+
             return 0;
         }
 

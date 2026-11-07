@@ -82,7 +82,8 @@ namespace Hv86.Vm
         /// реплика считает дубликатом и не портит себе состояние.
         /// </summary>
         public static async Task<Dictionary<string, object>> PutStateAsync(string url, string token,
-            string vmId, int epoch, long seq, string statePath, int timeoutMs, int relayPort = 0)
+            string vmId, int epoch, long seq, string statePath, int timeoutMs, int relayPort = 0,
+            string lease = null)
         {
             if (!File.Exists(statePath)) throw new Hv86Exception("state не найден: " + statePath);
 
@@ -92,7 +93,8 @@ namespace Hv86.Vm
                            "&epoch=" + epoch +
                            "&seq=" + seq +
                            "&size=" + size +
-                           (relayPort > 0 ? "&relay_port=" + relayPort : "");
+                           (relayPort > 0 ? "&relay_port=" + relayPort : "") +
+                           (string.IsNullOrEmpty(lease) ? "" : "&lease=" + Uri.EscapeDataString(lease));
 
             using (FileStream body = new FileStream(statePath, FileMode.Open, FileAccess.Read,
                        FileShare.ReadWrite, 1 << 16, FileOptions.SequentialScan))

@@ -538,6 +538,8 @@
         byId("hostCapture").value = settings.capture_release || "f8f12";
         byId("hostReplicaPort").value = String(settings.replica_port || 0);
         byId("hostReplicaToken").value = settings.replica_token || "";
+        byId("hostWitnessUrl").value = settings.witness_url || "";
+        byId("hostWitnessToken").value = settings.witness_token || "";
 
         openModal("hostSettingsModal");
     }
@@ -549,7 +551,9 @@
             text_font_size: Math.max(0, Number(byId("hostTextSize").value) || 0),
             capture_release: byId("hostCapture").value,
             replica_port: Math.max(0, Math.min(65535, Number(byId("hostReplicaPort").value) || 0)),
-            replica_token: byId("hostReplicaToken").value
+            replica_token: byId("hostReplicaToken").value,
+            witness_url: byId("hostWitnessUrl").value.trim(),
+            witness_token: byId("hostWitnessToken").value
         });
 
         closeModal("hostSettingsModal");
@@ -576,6 +580,9 @@
         byId("setInterval").value = Math.max(2, Math.round((vm.interval_ms || 15000) / 1000));
         byId("setRemoteUrl").value = vm.replica_url || "";
         byId("setRemoteToken").value = vm.replica_token || "";
+        byId("setLeaseUrl").value = vm.lease_url || "";
+        byId("setLeaseToken").value = vm.lease_token || "";
+        byId("setAutoPromote").checked = !!vm.auto_promote;
         syncRemoteFields();
         byId("setKeep").value = vm.ft_keep || 3;
         byId("setRestart").value = vm.restart || "on-failure";
@@ -697,6 +704,9 @@
             text_font_size: Math.max(0, Number(byId("setTextSize").value) || 0),
             replica_url: byId("setRemoteUrl").value.trim(),
             replica_token: byId("setRemoteToken").value,
+            lease_url: byId("setLeaseUrl").value.trim(),
+            lease_token: byId("setLeaseToken").value,
+            auto_promote: byId("setAutoPromote").checked,
             forwards: state.fwdDraft
         });
 

@@ -20,6 +20,11 @@ namespace Hv86.App
         private Timer _timer;
         private ReplicaServer _replica;
         private int _replicaPort;
+        private readonly object _leaseGate = new object();
+        private Timer _autopromote;
+        private readonly Dictionary<string, string> _leaseOk = new Dictionary<string, string>();
+        private readonly Dictionary<string, DateTime> _leaseOkUntil = new Dictionary<string, DateTime>();
+        private bool _promoting;
         private readonly DateTime _startedUtc = DateTime.UtcNow;
 
         public void Start()
@@ -38,6 +43,14 @@ namespace Hv86.App
 
             _timer = new Timer(delegate { try { _manager.Tick(); } catch (Exception ex) { Log.Exception("FT", "тик", ex); } },
                 null, 2000, 2000);
+
+            // автоматический подъём реплики: отдельный таймер, чтобы не
+            // смешивать с чекпоинтами и сторожем
+            _autopromote = new Timer(delegate
+            {
+                try { AutoPromoteTick(); }
+                catch (Exception ex) { Log.Exception("FT", "авто-подъём", ex); }
+            }, null, 3000, 2000);
 
             ApplyReplicaListener();
 
@@ -69,7 +82,8 @@ namespace Hv86.App
 
             try
             {
-                ReplicaServer server = new ReplicaServer(ReplicaStore.Default(), port, token);
+                ReplicaServer server = new ReplicaServer(ReplicaStore.Default(), port, token, true,
+                    LeaseCurrent);
                 server.Start();
 
                 _replica = server;
@@ -83,10 +97,125 @@ namespace Hv86.App
             }
         }
 
+        /// <summary>
+        /// Действительна ли аренда, с которой пришёл state. Спрашиваем свидетеля
+        /// (с кэшем на пару секунд: state летит каждые 15 с, лишние запросы ни к
+        /// чему). Свидетель не настроен - проверки нет, как и раньше.
+        /// </summary>
+        private bool LeaseCurrent(string vmId, string lease)
+        {
+            string url = HostSettings.WitnessUrl;
+
+            if (string.IsNullOrEmpty(url)) return true;
+            if (string.IsNullOrEmpty(lease)) return false;
+
+            lock (_leaseGate)
+            {
+                string known;
+                DateTime until;
+
+                if (_leaseOk.TryGetValue(vmId, out known) && known == lease &&
+                    _leaseOkUntil.TryGetValue(vmId, out until) && DateTime.UtcNow < until)
+                    return true;
+            }
+
+            try
+            {
+                Dictionary<string, object> reply = WitnessClient.CheckAsync(url, HostSettings.WitnessToken,
+                    vmId, lease, 3000).GetAwaiter().GetResult();
+
+                bool current = Json.GetBool(reply, "current", false);
+
+                lock (_leaseGate)
+                {
+                    _leaseOk[vmId] = lease;
+                    _leaseOkUntil[vmId] = DateTime.UtcNow.AddSeconds(2);
+                }
+
+                if (!current) Log.Warn("WIT", "state с недействительной арендой отклонён: " + vmId);
+
+                return current;
+            }
+            catch (Exception ex)
+            {
+                // свидетель молчит - не принимаем: безопасность важнее полноты
+                Log.Warn("WIT", "аренду проверить не удалось (" + vmId + "): " + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Автоматический подъём: если реплика прогрета, основной разрешил
+        /// авто-подъём, а аренда освободилась - занимаем её и поднимаемся.
+        /// </summary>
+        private void AutoPromoteTick()
+        {
+            if (_manager == null) return;
+
+            string url = HostSettings.WitnessUrl;
+            if (string.IsNullOrEmpty(url)) return;
+
+            lock (_leaseGate)
+            {
+                if (_promoting) return;
+            }
+
+            foreach (Dictionary<string, object> replica in _manager.LocalReplicas())
+            {
+                if (!Json.GetBool(replica, "warm", false)) continue;
+                if (!Json.GetBool(replica, "auto_promote", false)) continue;
+
+                string vmId = Json.GetString(replica, "vm_id", "");
+                if (vmId.Length == 0) continue;
+
+                Dictionary<string, object> claim;
+
+                try
+                {
+                    claim = WitnessClient.ClaimAsync(url, HostSettings.WitnessToken, vmId,
+                        Environment.MachineName, 12, 5000).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("WIT", "claim " + vmId + ": " + ex.Message);
+                    continue;
+                }
+
+                if (!Json.GetBool(claim, "granted", false)) continue;
+
+                string leaseToken = Json.GetString(claim, "token", "");
+
+                lock (_leaseGate) _promoting = true;
+
+                Log.Warn("FT", "аренда " + vmId + " свободна: поднимаю реплику автоматически");
+
+                Task.Run(async delegate
+                {
+                    try
+                    {
+                        await _manager.PromoteReplicaAsync(vmId, leaseToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error("FT", "авто-подъём " + vmId + ": " + ex.Message);
+                    }
+                    finally
+                    {
+                        lock (_leaseGate) _promoting = false;
+                    }
+                });
+
+                return;
+            }
+        }
+
         public void Stop()
         {
             try { _timer?.Dispose(); } catch { }
             _timer = null;
+
+            try { _autopromote?.Dispose(); } catch { }
+            _autopromote = null;
 
             try { _replica?.Dispose(); } catch { }
             _replica = null;

@@ -43,6 +43,7 @@ namespace Hv86.App
                 TestShare(dir);
                 TestVmUpgrade(dir);
                 TestReplica(dir);
+                TestWitness(dir);
             }
             catch (Exception ex)
             {
@@ -807,6 +808,158 @@ namespace Hv86.App
             probe.Stop();
 
             return port;
+        }
+
+        /// <summary>
+        /// Свидетель и аренда: выдача, отказ второму, передача после истечения,
+        /// смена токена (fencing) и отказ приёмника реплики на чужой токен.
+        /// </summary>
+        private static void TestWitness(string dir)
+        {
+            string work = Path.Combine(dir, "witness");
+            Directory.CreateDirectory(work);
+
+            WitnessStore store = new WitnessStore(Path.Combine(work, "store"));
+            const string vmId = "abcd1234";
+
+            WitnessServer server = null;
+            string url = null;
+
+            for (int attempt = 0; attempt < 5 && server == null; attempt++)
+            {
+                int port = FreePort();
+                WitnessServer candidate = new WitnessServer(store, port, "wsec", 2, false);
+
+                try
+                {
+                    candidate.Start();
+                    server = candidate;
+                    url = candidate.BaseUrl;
+                }
+                catch (Exception)
+                {
+                    candidate.Dispose();
+                    System.Threading.Thread.Sleep(100);
+                }
+            }
+
+            if (server == null)
+            {
+                Fail("witness: no listener could be started");
+                return;
+            }
+
+            using (server)
+            {
+                Dictionary<string, object> first = WitnessClient.ClaimAsync(url, "wsec", vmId, "primary", 2, 5000)
+                    .GetAwaiter().GetResult();
+
+                Check(Json.GetBool(first, "granted", false) && Json.GetString(first, "token", "").Length > 0,
+                    "witness: first claim is granted with a token");
+
+                string tokenA = Json.GetString(first, "token", "");
+
+                Dictionary<string, object> second = WitnessClient.ClaimAsync(url, "wsec", vmId, "replica", 2, 5000)
+                    .GetAwaiter().GetResult();
+
+                Check(!Json.GetBool(second, "granted", true) && Json.GetLong(second, "expires_in_sec", 0) > 0,
+                    "witness: second claim is refused while the lease is alive");
+
+                Check(Json.GetBool(WitnessClient.CheckAsync(url, "wsec", vmId, tokenA, 5000)
+                        .GetAwaiter().GetResult(), "current", false),
+                    "witness: the holder token is current");
+
+                Check(!Json.GetBool(WitnessClient.CheckAsync(url, "wsec", vmId, "not-a-token", 5000)
+                        .GetAwaiter().GetResult(), "current", true),
+                    "witness: a foreign token is not current");
+
+                Dictionary<string, object> renewed = WitnessClient.RenewAsync(url, "wsec", vmId, tokenA, 2, 5000)
+                    .GetAwaiter().GetResult();
+
+                Check(Json.GetBool(renewed, "ok", false), "witness: renewal extends the lease");
+
+                // TTL 2 с: ждём истечения, чтобы реплика могла забрать аренду
+                System.Threading.Thread.Sleep(2600);
+
+                Dictionary<string, object> takeover = WitnessClient.ClaimAsync(url, "wsec", vmId, "replica", 2, 5000)
+                    .GetAwaiter().GetResult();
+
+                string tokenB = Json.GetString(takeover, "token", "");
+
+                Check(Json.GetBool(takeover, "granted", false) && tokenB.Length > 0 && tokenB != tokenA,
+                    "witness: an expired lease goes to the other host with a new token");
+
+                Check(!Json.GetBool(WitnessClient.CheckAsync(url, "wsec", vmId, tokenA, 5000)
+                        .GetAwaiter().GetResult(), "current", true),
+                    "witness: the old token is fenced after the handover");
+
+                Check(Json.GetBool(WitnessClient.CheckAsync(url, "wsec", vmId, tokenB, 5000)
+                        .GetAwaiter().GetResult(), "current", false),
+                    "witness: the new token is the only valid one");
+
+            // приёмник реплики с проверкой аренды: чужой токен не принимает
+            ReplicaStore replicas = new ReplicaStore(Path.Combine(work, "replicas"));
+
+            ReplicaServer receiver = null;
+            string receiverUrl = null;
+
+            for (int attempt = 0; attempt < 5 && receiver == null; attempt++)
+            {
+                int port = FreePort();
+                ReplicaServer candidate = new ReplicaServer(replicas, port, "rtok", false,
+                    (vm, lease) => store.IsCurrent(vm, lease));
+
+                try
+                {
+                    candidate.Start();
+                    receiver = candidate;
+                    receiverUrl = candidate.BaseUrl;
+                }
+                catch (Exception)
+                {
+                    candidate.Dispose();
+                    System.Threading.Thread.Sleep(100);
+                }
+            }
+
+            if (receiver == null)
+            {
+                Fail("witness: replica receiver could not be started");
+                return;
+            }
+
+            using (receiver)
+            {
+                string disk = Path.Combine(work, "disk.img");
+                File.WriteAllBytes(disk, new byte[1024 * 1024]);
+
+                VmDefinition vm = new VmDefinition();
+                vm.Id = vmId;
+                vm.Name = "quorum";
+
+                ReplicaClient.BeginAsync(receiverUrl, "rtok", vm, disk, 1, 60000).GetAwaiter().GetResult();
+
+                string state = Path.Combine(work, "state.bin");
+                File.WriteAllBytes(state, new byte[512 * 1024]);
+
+                bool rejected = false;
+
+                try
+                {
+                    ReplicaClient.PutStateAsync(receiverUrl, "rtok", vmId, 1, 1, state, 30000, 0, "stale-token")
+                        .GetAwaiter().GetResult();
+                }
+                catch (Hv86Exception ex) { rejected = ex.Message.IndexOf("409", StringComparison.Ordinal) >= 0; }
+
+                Check(rejected, "witness: replica refuses state with a stale lease token");
+
+                // действующий токен (тот, что реплика получила при передаче аренды)
+                ReplicaClient.PutStateAsync(receiverUrl, "rtok", vmId, 1, 2, state, 30000, 0, tokenB)
+                    .GetAwaiter().GetResult();
+
+                Check(true, "witness: replica accepts state with a valid lease token");
+            }
+            }
         }
 
         private static void TestShare(string dir)

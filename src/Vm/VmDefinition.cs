@@ -93,6 +93,15 @@ namespace Hv86.Vm
         /// </summary>
         public int ReplicaEpoch;
 
+        /// <summary>Адрес свидетеля для аренды (docs/replica-quorum.md).</summary>
+        public string LeaseUrl = "";
+
+        /// <summary>Общий секрет со свидетелем.</summary>
+        public string LeaseToken = "";
+
+        /// <summary>Разрешить реплике подниматься самой, когда аренда освободится.</summary>
+        public bool AutoPromote;
+
         // Состояние (обновляет служба, не пользователь)
         public string State = "stopped";
         public int Restarts;
@@ -143,7 +152,10 @@ namespace Hv86.Vm
                 "restore_on_crash", RestoreOnCrash,
                 "replica_url", ReplicaUrl ?? "",
                 "replica_token", ReplicaToken ?? "",
-                "replica_epoch", ReplicaEpoch);
+                "replica_epoch", ReplicaEpoch,
+                "lease_url", LeaseUrl ?? "",
+                "lease_token", LeaseToken ?? "",
+                "auto_promote", AutoPromote);
 
             Dictionary<string, object> netBlock = Json.Obj(
                     "type", NetType,
@@ -306,6 +318,9 @@ namespace Hv86.Vm
                 vm.ReplicaUrl = Json.GetString(ft, "replica_url", "");
                 vm.ReplicaToken = Json.GetString(ft, "replica_token", "");
                 vm.ReplicaEpoch = Json.GetInt(ft, "replica_epoch", 0);
+                vm.LeaseUrl = Json.GetString(ft, "lease_url", "");
+                vm.LeaseToken = Json.GetString(ft, "lease_token", "");
+                vm.AutoPromote = Json.GetBool(ft, "auto_promote", false);
             }
 
             vm.State = Json.GetString(map, "state", "stopped");
