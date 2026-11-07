@@ -279,8 +279,16 @@ namespace Hv86.Vm
             Log.Info("REPL", "реплика " + vmId + " разложена как ВМ (state " + seq + ", эпоха " +
                              Json.GetInt(meta, "epoch", 0) + ")");
 
-            // принятая копия больше не нужна: она уже в каталоге ВМ
-            try { if (Directory.Exists(dir)) AtomicFile.MoveToTrash(dir, "replica-promoted-" + vmId); } catch { }
+            // принятая копия больше не нужна: она уже в каталоге ВМ. Ошибку уборки
+            // не глотаем молча - иначе непонятно, почему копия осталась
+            try
+            {
+                if (Directory.Exists(dir)) AtomicFile.MoveToTrash(dir, "replica-promoted-" + vmId);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("REPL", "принятая копия " + vmId + " не убрана: " + ex.Message);
+            }
 
             return Json.Obj(
                 "vm", def,
