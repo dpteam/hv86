@@ -72,7 +72,9 @@ namespace Hv86.App
                     "name", "itest-freedos",
                     "preset", "freedos",
                     "memory_mb", 32,
-                    "disk_mb", 0,
+                    // диск нужен не гостю, а проверке репликации: реплика возит
+                    // базовый образ, а без диска реплицировать нечего
+                    "disk_mb", 16,
                     "share_path", shareDir,
                     "share_readonly", true));
 
@@ -90,7 +92,6 @@ namespace Hv86.App
 
                 // приём реплик: служба должна реально открыть порт и принять
                 // базовый образ + state от «второй машины» (здесь - от теста)
-                CheckReplicaListener(client);
 
                 // проброс портов: host:2399 -> guest:22 (в FreeDOS TCP нет,
                 // поэтому ждём именно корректный отказ, а не данные)
@@ -111,6 +112,10 @@ namespace Hv86.App
                 WaitInstructions(client, id, 1000000, 60000);
                 Ok("guest executing", "instructions=" + Json.GetLong(Call(client, "vm.get", Json.Obj("id", id)),
                     "instructions", 0));
+
+                // приём реплик: служба открывает порт, принимает образ и state
+                // «второй машины», а затем поднимает из этого state новую ВМ
+                CheckReplicaListener(client, id);
 
                 // web-движок: общая папка через синхронный XHR к /share.
                 // Проверяем transport и настоящий stat файла из шары.
@@ -771,7 +776,7 @@ namespace Hv86.App
         /// Приём реплик на самой службе: включаем настройкой хоста, отправляем
         /// образ и state как «вторая машина», проверяем, что служба их приняла.
         /// </summary>
-        private static void CheckReplicaListener(PipeClient client)
+        private static void CheckReplicaListener(PipeClient client, string vmId)
         {
             int port = FreePort();
             const string token = "itest-token";
@@ -843,11 +848,92 @@ namespace Hv86.App
 
                 if (found) Ok("replica stored", "state accepted and visible via host.replicas");
                 else Fail("replica was not stored: " + Json.Stringify(replicas));
+
+                // ---- настоящий сценарий: state работающей ВМ -> реплика -> подъём
+                CheckReplicaPromotion(client, vmId, url, token);
             }
             finally
             {
                 // выключаем приёмник, чтобы не мешать остальным проверкам
                 Call(client, "host.settings.set", Json.Obj("replica_port", 0, "replica_token", ""), 15000);
+            }
+        }
+
+        /// <summary>
+        /// Полный сценарий отказа: снимок работающей ВМ уезжает на реплику и
+        /// поднимается там как отдельная ВМ. Проверяет и раскладку, и запуск
+        /// с восстановлением из принятого state.
+        /// </summary>
+        private static void CheckReplicaPromotion(PipeClient client, string vmId, string url, string token)
+        {
+            const string promotedId = "beef1234";
+            string snapshotId = null;
+
+            try
+            {
+                Dictionary<string, object> snapshot = Call(client, "vm.snapshot",
+                    Json.Obj("id", vmId, "name", "for-replica"), 120000);
+
+                snapshotId = Json.GetString(snapshot, "id", "");
+                if (snapshotId.Length == 0) { Fail("replica promotion: snapshot was not created"); return; }
+
+                string statePath = Path.Combine(Paths.VmSnapshotsDir(vmId), snapshotId, "state.bin");
+
+                if (!File.Exists(statePath)) { Fail("replica promotion: snapshot has no state.bin"); return; }
+
+                VmDefinition source = VmStore.Load(vmId);
+                if (source == null) { Fail("replica promotion: source VM is gone"); return; }
+
+                VmDefinition staged = source.Clone(promotedId, "promoted-from-replica");
+                string diskPath = Paths.Absolute(source.Id, source.HdaFile);
+
+                ReplicaClient.BeginAsync(url, token, staged, diskPath, 1, 300000).GetAwaiter().GetResult();
+                ReplicaClient.PutStateAsync(url, token, promotedId, 1, 7, statePath, 300000, 0)
+                    .GetAwaiter().GetResult();
+
+                Ok("replica push", "snapshot of the running VM reached the replica");
+
+                Call(client, "vm.promote-replica", Json.Obj("replica", promotedId), 300000);
+
+                Dictionary<string, object> running = WaitState(client, promotedId, "running", 120000);
+
+                if (Json.GetString(running, "state", "") != "running")
+                {
+                    Fail("replica promotion: VM did not start (" + Json.Stringify(running) + ")");
+                    return;
+                }
+
+                WaitInstructions(client, promotedId, 200000, 60000);
+
+                long instructions = Json.GetLong(Call(client, "vm.get", Json.Obj("id", promotedId)),
+                    "instructions", 0);
+
+                if (instructions > 200000)
+                    Ok("replica promotion", "guest continues from the replicated state (" + instructions + " instr)");
+                else
+                    Fail("replica promotion: guest is not executing after restore");
+            }
+            catch (Exception ex)
+            {
+                Fail("replica promotion: " + ex.Message);
+            }
+            finally
+            {
+                try
+                {
+                    Call(client, "vm.stop", Json.Obj("id", promotedId), 60000);
+                    Call(client, "vm.delete", Json.Obj("id", promotedId), 120000);
+                }
+                catch { }
+
+                if (!string.IsNullOrEmpty(snapshotId))
+                {
+                    try
+                    {
+                        Call(client, "vm.snapshot.delete", Json.Obj("id", vmId, "snapshot", snapshotId), 60000);
+                    }
+                    catch { }
+                }
             }
         }
 

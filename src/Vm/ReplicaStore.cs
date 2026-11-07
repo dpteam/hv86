@@ -134,7 +134,7 @@ namespace Hv86.Vm
         /// (повтор после обрыва связи не должен ломать реплику).
         /// </summary>
         public Dictionary<string, object> PutState(string vmId, int epoch, long seq, Stream body,
-            out bool duplicate)
+            out bool duplicate, int relayPort = 0)
         {
             duplicate = false;
 
@@ -179,6 +179,10 @@ namespace Hv86.Vm
             meta["state_sha256"] = sha;
             meta["updated_utc"] = DateTime.UtcNow.ToString("o");
 
+            // порт релея нужен при подъёме: адрес wisp://127.0.0.1:<порт> уже
+            // записан в state, и гость после переключения должен его найти
+            if (relayPort > 0) meta["relay_port"] = relayPort;
+
             Json.WriteFile(Path.Combine(dir, "replica.json"), meta);
 
             // держим только два последних состояния: старое может понадобиться,
@@ -195,6 +199,95 @@ namespace Hv86.Vm
             Log.Info("REPL", "state " + seq + " для " + vmId + ": " + (size / 1024 / 1024) + " МБ");
 
             return meta;
+        }
+
+        /// <summary>
+        /// Раскладывает принятую реплику в обычную ВМ: образ копируется в
+        /// disks/system.img, последний state - в файл восстановления, vm.json
+        /// пишется заново с путями этого хоста.
+        ///
+        /// Вызывается только у остановленной ВМ (или когда её ещё нет): живой
+        /// процесс держит диск, и подменять его под ним нельзя.
+        /// </summary>
+        public Dictionary<string, object> Promote(string vmId, out string statePath)
+        {
+            statePath = null;
+
+            Dictionary<string, object> meta = Read(vmId);
+
+            if (meta == null) throw new ReplicaConflict("реплика не найдена: " + vmId);
+
+            // id ВМ у hv86 - hex (первые 8 символов GUID): по нему строится путь,
+            // и принимать «что угодно» на подъёме не стоит
+            if (!VmStore.IsValidId(vmId))
+                throw new ReplicaConflict("id реплики не похож на id ВМ: " + vmId);
+
+            long seq = Json.GetLong(meta, "seq", 0);
+
+            if (seq <= 0) throw new ReplicaConflict("у реплики нет ни одного state: поднимать нечего");
+
+            string dir = Dir(vmId);
+            string disk = Path.Combine(dir, "disk.img");
+            string state = Path.Combine(dir, "state-" + seq + ".bin");
+
+            if (!File.Exists(disk)) throw new ReplicaConflict("базовый образ реплики потерян");
+            if (!File.Exists(state)) throw new ReplicaConflict("state " + seq + " реплики потерян");
+
+            string vmJson = Json.GetString(meta, "vm_json", "");
+            Dictionary<string, object> map = Json.ParseObjectSafe(vmJson);
+
+            if (map == null) throw new ReplicaConflict("реплика без описания ВМ: не из чего собирать");
+
+            VmDefinition def = VmDefinition.FromDict(map);
+
+            if (def == null) throw new ReplicaConflict("описание ВМ в реплике не разобрано");
+
+            if (def.V86Version != AppInfo.V86Version)
+                throw new ReplicaConflict("реплика сделана на v86 " + def.V86Version +
+                                          ", а этот хост на " + AppInfo.V86Version);
+
+            Paths.EnsureVmDirectories(vmId);
+
+            string diskTarget = Path.Combine(Paths.VmDisksDir(vmId), "system.img");
+            string stateTarget = Path.Combine(Paths.VmDir(vmId), "replica-state.bin");
+
+            // сначала state, потом образ: если прервёмся, vm.json всё ещё старый
+            AtomicFile.Move(state, stateTarget);
+            AtomicFile.Move(disk, diskTarget);
+
+            def.Id = vmId;
+            def.Name = string.IsNullOrEmpty(def.Name) ? vmId : def.Name;
+            def.HdaFile = "disks/system.img";
+            def.FdaFile = null;
+            def.FdaSet = new List<string>();
+            def.FdaIndex = 0;
+            def.CdromFile = null;
+            def.State = "stopped";
+            def.Restarts = 0;
+            def.LastError = "";
+            def.V86Version = AppInfo.V86Version;
+
+            // управление репликацией на поднятой ВМ выключено: она теперь основная
+            def.FtMode = def.FtMode == "remote" ? "checkpoint" : def.FtMode;
+            def.ReplicaUrl = "";
+            def.ReplicaToken = "";
+
+            VmStore.Save(def);
+
+            statePath = stateTarget;
+
+            Log.Info("REPL", "реплика " + vmId + " разложена как ВМ (state " + seq + ", эпоха " +
+                             Json.GetInt(meta, "epoch", 0) + ")");
+
+            // принятая копия больше не нужна: она уже в каталоге ВМ
+            try { if (Directory.Exists(dir)) AtomicFile.MoveToTrash(dir, "replica-promoted-" + vmId); } catch { }
+
+            return Json.Obj(
+                "vm", def,
+                "seq", seq,
+                "epoch", Json.GetInt(meta, "epoch", 0),
+                "relay_port", Json.GetInt(meta, "relay_port", 0),
+                "state", stateTarget);
         }
 
         public Dictionary<string, object> Status(string vmId)

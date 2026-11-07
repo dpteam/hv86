@@ -140,6 +140,9 @@ namespace Hv86.App
                 case "replicas":
                     return Replicas(client, json);
 
+                case "promote":
+                    return Promote(client, positional, json);
+
                 case "create":
                     return Create(client, options, json);
 
@@ -484,6 +487,31 @@ namespace Hv86.App
                                   Json.GetLong(replica, "age_sec", 0) + " с назад" +
                                   (Json.GetBool(replica, "warm", false) ? "" : " (пусто)"));
             }
+
+            return 0;
+        }
+
+        /// <summary>
+        /// `promote <id>`: поднять принятую реплику как ВМ на этом хосте.
+        /// Идентификатор не ищется среди ВМ - её может ещё не быть.
+        /// </summary>
+        private static int Promote(PipeClient client, List<string> positional, bool json)
+        {
+            string id = Positional(positional, 1);
+
+            if (string.IsNullOrEmpty(id))
+            {
+                Console.Error.WriteLine("нужен id реплики: hv86 --cli promote <id> (список - hv86 --cli replicas)");
+                return 2;
+            }
+
+            object result = Result(client, "vm.promote-replica", Json.Obj("replica", id), 600000);
+            Dictionary<string, object> view = result as Dictionary<string, object>;
+
+            if (json) Console.WriteLine(Json.Pretty(view));
+
+            Console.WriteLine("ВМ " + Json.GetString(view, "name", id) + " поднята из реплики (" +
+                              Json.GetString(view, "state", "") + ")");
 
             return 0;
         }
@@ -850,6 +878,7 @@ namespace Hv86.App
             Console.WriteLine("  hv86 --cli floppy <vm> [next|prev|N]     сменить дискету комплекта");
             Console.WriteLine("  hv86 --cli migrate <vm>                  перенести ВМ на встроенный v86");
             Console.WriteLine("  hv86 --cli replicas                     реплики, принятые этим хостом");
+            Console.WriteLine("  hv86 --cli promote <id>                 поднять принятую реплику как ВМ");
             Console.WriteLine("  hv86 --cli screen <vm>               текст с экрана (headless)");
             Console.WriteLine("  hv86 --cli create --name <имя> --preset <id> [--memory МБ] [--disk МБ] [--net relay] [--engine headless] [--share C:\\dir]");
             Console.WriteLine("  hv86 --cli create --name <имя> --iso <файл>");

@@ -186,7 +186,8 @@ namespace Hv86.Vm
                         Value(query, "vm"),
                         ToInt(Value(query, "epoch")),
                         ToLong(Value(query, "seq")),
-                        context.Request.InputStream, out duplicate);
+                        context.Request.InputStream, out duplicate,
+                        ToInt(Value(query, "relay_port")));
 
                     await RespondAsync(context, 200, Json.Obj(
                         "ok", true,

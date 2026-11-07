@@ -59,6 +59,7 @@
         host: null,
         vms: [],
         presets: [],
+        replicas: [],
         selected: null,
         snapshotsId: null,
         pendingPickTarget: null,
@@ -177,9 +178,67 @@
     function render() {
         renderService();
         renderTree();
+        renderReplicas();
         renderTable();
         renderActions();
         renderStatus();
+    }
+
+    /// Принятые реплики: хост-реплика держит чужие state, и поднять их можно
+    /// одной кнопкой. Показываем только то, что реально лежит на этом хосте.
+    function renderReplicas() {
+        var host = byId("replicaBanner");
+        if (!host) return;
+
+        host.innerHTML = "";
+
+        var items = state.replicas || [];
+
+        if (items.length === 0) {
+            host.classList.add("hidden");
+            return;
+        }
+
+        items.forEach(function (replica) {
+            var row = document.createElement("div");
+            row.className = "replica-banner-row";
+            row.style.display = "flex";
+            row.style.alignItems = "center";
+            row.style.gap = "10px";
+
+            var info = document.createElement("span");
+            info.innerHTML = T("replica.ready")
+                .replace("{id}", esc(replica.vm_id))
+                .replace("{name}", esc(replica.name || replica.vm_id))
+                .replace("{age}", esc(replica.age_sec || 0));
+
+            var meta = document.createElement("span");
+            meta.className = "mono";
+            meta.textContent = "epoch " + (replica.epoch || 0) + " · state " + (replica.seq || 0);
+
+            var button = document.createElement("button");
+            button.className = "btn primary";
+            button.textContent = T("replica.promote");
+            button.disabled = !replica.warm;
+
+            button.addEventListener("click", function () {
+                ask({
+                    title: T("replica.promoteTitle"),
+                    label: T("replica.promoteLabel").replace("{id}", replica.vm_id),
+                    hideInput: true
+                }, function () {
+                    post({ action: "vm.promote-replica", replica: replica.vm_id });
+                    toast(T("replica.promoting"), "info");
+                });
+            });
+
+            row.appendChild(info);
+            row.appendChild(meta);
+            row.appendChild(button);
+            host.appendChild(row);
+        });
+
+        host.classList.remove("hidden");
     }
 
     function renderService() {
@@ -906,6 +965,7 @@
                 state.host = message.host || null;
                 state.vms = message.vms || [];
                 state.presets = message.presets || [];
+                state.replicas = message.replicas || [];
                 state.version = message.version || "";
                 state.v86 = message.v86 || "";
                 state.data_dir = message.data_dir || "";

@@ -312,6 +312,22 @@ namespace Hv86.App
                 });
             }
 
+            _bridge.Register("vm.promote-replica", async message =>
+            {
+                string replica = Json.GetString(message, "replica", "");
+
+                object result = await CallService("vm.promote-replica",
+                    Json.Obj("replica", replica), 600000);
+
+                Dictionary<string, object> view = result as Dictionary<string, object>;
+
+                _bridge.Send(WebBridge.Msg("toast", "text",
+                    "Promoted " + Json.GetString(view, "name", replica) + " from the replica",
+                    "kind", "ok"));
+
+                await PushStateAsync();
+            });
+
             _bridge.Register("vm.snapshot", async message =>
             {
                 object result = await CallService("vm.snapshot", Json.Obj(
@@ -686,12 +702,17 @@ namespace Hv86.App
             object host = null;
             object vms = new List<object>();
             object presets = new List<object>();
+            object replicas = new List<object>();
 
             try
             {
                 host = await CallService("host.status", null, 5000).ConfigureAwait(false);
                 vms = await CallService("vm.list", null, 5000).ConfigureAwait(false);
                 presets = await CallService("vm.presets", null, 5000).ConfigureAwait(false);
+
+                // принятые реплики: на основном хосте список пуст, на реплике -
+                // это то, что можно поднять одной кнопкой
+                replicas = await CallService("host.replicas", null, 5000).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -704,6 +725,7 @@ namespace Hv86.App
             payload["host"] = host;
             payload["vms"] = vms ?? new List<object>();
             payload["presets"] = presets ?? new List<object>();
+            payload["replicas"] = replicas ?? new List<object>();
 
             _bridge.Send(payload);
         }

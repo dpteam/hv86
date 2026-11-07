@@ -212,6 +212,10 @@ namespace Hv86.App
                 case "vm.migrate":
                     return await _manager.MigrateAsync(id).ConfigureAwait(false);
 
+                case "vm.promote-replica":
+                    return await _manager.PromoteReplicaAsync(
+                        Json.GetString(parameters, "replica", id)).ConfigureAwait(false);
+
                 case "vm.update":
                     return await _manager.UpdateAsync(id, parameters).ConfigureAwait(false);
 

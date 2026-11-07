@@ -411,7 +411,7 @@ namespace Hv86.Vm
 
         // --------------------------------------------------------------- запуск
 
-        public async Task<object> StartAsync(string id, bool showConsole, string restorePath)
+        public async Task<object> StartAsync(string id, bool showConsole, string restorePath, int relayPort = 0)
         {
             VmRuntime runtime = Get(id);
 
@@ -477,7 +477,7 @@ namespace Hv86.Vm
                 if (process == null)
                 {
                     process = await VmProcess.LaunchAsync(runtime.Def, showConsole, restorePath,
-                        (name, data) => OnVmEvent(id, name, data)).ConfigureAwait(false);
+                        (name, data) => OnVmEvent(id, name, data), false, relayPort).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -1179,6 +1179,90 @@ namespace Hv86.Vm
             }
         }
 
+        /// <summary>
+        /// Поднимает принятую реплику как обычную ВМ на этом хосте: раскладывает
+        /// образ и последний state в каталог ВМ и запускает с восстановления.
+        /// Порт релея берётся из реплики - адрес wisp://127.0.0.1:&lt;порт&gt; уже
+        /// записан в state, и гость после переключения должен найти сеть там же.
+        /// </summary>
+        public async Task<object> PromoteReplicaAsync(string id)
+        {
+            ReplicaStore store = ReplicaStore.Default();
+
+            if (store.Read(id) == null)
+                throw new Hv86Exception("на этом хосте нет реплики " + id);
+
+            VmRuntime runtime;
+
+            lock (_gate)
+            {
+                _vms.TryGetValue(id, out runtime);
+
+                if (runtime != null &&
+                    ((runtime.Proc != null && !runtime.Proc.HasExited) ||
+                     (runtime.Idle != null && !runtime.Idle.HasExited)))
+                    throw new Hv86Exception("ВМ " + id + " уже работает на этом хосте: сначала остановите её");
+            }
+
+            string statePath;
+            Dictionary<string, object> staged = store.Promote(id, out statePath);
+            VmDefinition def = staged["vm"] as VmDefinition;
+
+            if (def == null) throw new Hv86Exception("реплика не разложилась в описание ВМ");
+
+            lock (_gate)
+            {
+                if (runtime == null)
+                {
+                    runtime = new VmRuntime
+                    {
+                        Def = def,
+                        NextRingUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(2000, def.FtIntervalMs))
+                    };
+
+                    _vms[id] = runtime;
+                }
+                else
+                {
+                    runtime.Def = def;
+                    runtime.Instructions = 0;
+                    runtime.Mips = 0;
+                    runtime.LastRestore = null;
+                }
+            }
+
+            int relayPort = Json.GetInt(staged, "relay_port", 0);
+
+            Emit("vm.created", def.ToView());
+            Emit("ft.event", Json.Obj(
+                "id", id,
+                "kind", "replica-promoted",
+                "text", "Реплика поднята как основная ВМ (state " + Json.GetLong(staged, "seq", 0) +
+                        ", эпоха " + Json.GetInt(staged, "epoch", 0) + ")",
+                "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+
+            try
+            {
+                return await StartAsync(id, true, statePath, relayPort).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // образ и state уже на месте: повторный запуск возможен обычным
+                // способом, поэтому не притворяемся, что всё пропало
+                lock (_gate)
+                {
+                    runtime.Def.State = "stopped";
+                    runtime.Def.LastError = ex.Message;
+                    try { VmStore.Save(runtime.Def); } catch { }
+                }
+
+                EmitState(runtime);
+
+                throw new Hv86Exception("реплика разложена, но ВМ не запустилась: " + ex.Message +
+                                        ". Диск и state на месте - запустите ВМ обычным способом");
+            }
+        }
+
         public Task<object> CloneAsync(string id, string name)
         {
             VmRuntime runtime = Get(id);
@@ -1670,7 +1754,7 @@ namespace Hv86.Vm
                 try
                 {
                     Dictionary<string, object> result = await ReplicaClient.PutStateAsync(url, token, id, epoch,
-                        seq, statePath, 600000).ConfigureAwait(false);
+                        seq, statePath, 600000, runtime.RelayPort).ConfigureAwait(false);
 
                     lock (_gate)
                     {

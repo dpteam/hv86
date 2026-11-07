@@ -139,6 +139,15 @@ button, input, select {
 }
 .pane-head .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 
+/* принятая реплика: её видно сразу, а не только через CLI */
+.replica-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 10px 14px 0; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid #3a5a2a; background: #14200f; color: #cfe7c4; font-size: 12px;
+}
+.replica-banner.hidden { display: none; }
+.replica-banner .mono { font-family: Consolas, monospace; font-size: 11px; color: #9fb894; }
+
 .table-wrap { flex: 1 1 auto; overflow: auto; }
 
 table.vm {

@@ -701,6 +701,69 @@ namespace Hv86.App
 
                 Check(missing, "replica: unknown VM is reported as an error");
             }
+
+            // ------------------------------------------------------- промоушен
+            // Раскладка принятой реплики в обычную ВМ: образ и state на месте,
+            // vm.json переписан на пути этого хоста, реплика ушла в корзину.
+            ReplicaStore solo = new ReplicaStore(Path.Combine(work, "store2"));
+
+            string disk2 = Path.Combine(work, "base2.img");
+            File.WriteAllBytes(disk2, new byte[2 * 1024 * 1024]);
+
+            VmDefinition vm2 = new VmDefinition();
+            vm2.Id = "abcd1234";
+            vm2.Name = "promote";
+            vm2.MemoryMb = 32;
+
+            using (FileStream body = File.OpenRead(disk2))
+                solo.Begin("abcd1234", 1, "promote", Json.Stringify(vm2.ToDict()), 2 * 1024 * 1024, null, body);
+
+            string state2 = Path.Combine(work, "state2.bin");
+            File.WriteAllBytes(state2, new byte[3 * 1024 * 1024]);
+
+            bool duplicate2;
+
+            using (FileStream body = File.OpenRead(state2))
+                solo.PutState("abcd1234", 1, 9, body, out duplicate2, 4242);
+
+            string stagedState;
+            Dictionary<string, object> promoted = solo.Promote("abcd1234", out stagedState);
+
+            Check(promoted != null && File.Exists(stagedState) &&
+                  File.Exists(Path.Combine(Paths.VmDisksDir("abcd1234"), "system.img")),
+                "replica: promotion materializes disk and state");
+
+            VmDefinition back = VmStore.Load("abcd1234");
+
+            Check(back != null && back.HdaFile == "disks/system.img" && back.FdaFile == null &&
+                  back.State == "stopped" && back.V86Version == AppInfo.V86Version,
+                "replica: promoted VM has host-local media paths");
+
+            Check(Json.GetInt(promoted, "relay_port", 0) == 4242,
+                "replica: relay port travels with the state");
+
+            Check(!Directory.Exists(solo.Dir("abcd1234")),
+                "replica: staged copy is gone after promotion");
+
+            // чужая версия движка - поднимать нельзя, state не подойдёт
+            VmDefinition foreign = new VmDefinition();
+            foreign.Id = "deadbeef";
+            foreign.Name = "foreign";
+            foreign.V86Version = "0.0.1-old";
+
+            using (FileStream body = File.OpenRead(disk2))
+                solo.Begin("deadbeef", 1, "foreign", Json.Stringify(foreign.ToDict()), 2 * 1024 * 1024, null, body);
+
+            using (FileStream body = File.OpenRead(state2))
+                solo.PutState("deadbeef", 1, 1, body, out duplicate2);
+
+            bool foreignRefused = false;
+            string leftover;
+
+            try { solo.Promote("deadbeef", out leftover); }
+            catch (ReplicaConflict) { foreignRefused = true; }
+
+            Check(foreignRefused, "replica: promotion from another engine version is refused");
         }
 
         /// <summary>Свободный TCP-порт для тестового приёмника реплик.</summary>
