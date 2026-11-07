@@ -477,6 +477,8 @@
         select.value = font;
         byId("hostTextSize").value = String(settings.text_font_size || 0);
         byId("hostCapture").value = settings.capture_release || "f8f12";
+        byId("hostReplicaPort").value = String(settings.replica_port || 0);
+        byId("hostReplicaToken").value = settings.replica_token || "";
 
         openModal("hostSettingsModal");
     }
@@ -486,7 +488,9 @@
             action: "host.settings.set",
             text_font: byId("hostTextFont").value,
             text_font_size: Math.max(0, Number(byId("hostTextSize").value) || 0),
-            capture_release: byId("hostCapture").value
+            capture_release: byId("hostCapture").value,
+            replica_port: Math.max(0, Math.min(65535, Number(byId("hostReplicaPort").value) || 0)),
+            replica_token: byId("hostReplicaToken").value
         });
 
         closeModal("hostSettingsModal");
@@ -508,8 +512,12 @@
         byId("setEgressMode").value = vm.egress_mode === "safe" ? "safe" : (vm.egress_mode === "allowlist" ? "allowlist" : "any");
         byId("setEgressAllow").value = (vm.egress_allow || []).join("\n");
 
-        byId("setFtMode").value = vm.ft_mode === "checkpoint" ? "checkpoint" : (vm.ft_mode === "replica" ? "replica" : "off");
+        byId("setFtMode").value = vm.ft_mode === "remote" ? "remote" :
+            (vm.ft_mode === "checkpoint" ? "checkpoint" : (vm.ft_mode === "replica" ? "replica" : "off"));
         byId("setInterval").value = Math.max(2, Math.round((vm.interval_ms || 15000) / 1000));
+        byId("setRemoteUrl").value = vm.replica_url || "";
+        byId("setRemoteToken").value = vm.replica_token || "";
+        syncRemoteFields();
         byId("setKeep").value = vm.ft_keep || 3;
         byId("setRestart").value = vm.restart || "on-failure";
         byId("setAttempts").value = vm.max_attempts === undefined ? 5 : vm.max_attempts;
@@ -628,10 +636,18 @@
             egress_allow: byId("setEgressAllow").value.split("\n").map(function (line) { return line.trim(); }).filter(function (line) { return line.length > 0; }),
             text_font: byId("setTextFont").value,
             text_font_size: Math.max(0, Number(byId("setTextSize").value) || 0),
+            replica_url: byId("setRemoteUrl").value.trim(),
+            replica_token: byId("setRemoteToken").value,
             forwards: state.fwdDraft
         });
 
         closeModal("settingsModal");
+    }
+
+    /// Поля адреса реплики нужны только в режиме remote: иначе это лишний шум.
+    function syncRemoteFields() {
+        var mode = byId("setFtMode").value;
+        byId("remoteReplicaFields").classList.toggle("hidden", mode !== "remote");
     }
 
     function ask(options, done) {
@@ -852,6 +868,7 @@
     byId("newPreset").addEventListener("change", applyPreset);
     byId("newSource").addEventListener("change", function () { fillPresets(); applyPreset(); });
     byId("setNetMode").addEventListener("change", renderForwards);
+    byId("setFtMode").addEventListener("change", syncRemoteFields);
     byId("lang").value = lang;
 
     byId("lang").addEventListener("change", function () {

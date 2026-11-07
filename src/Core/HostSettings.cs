@@ -51,6 +51,24 @@ namespace Hv86.Core
             }
         }
 
+        /// <summary>
+        /// Порт, на котором этот хост принимает реплики с другой машины
+        /// (ft.mode = remote у ВМ на основном хосте). 0 - не принимать.
+        /// </summary>
+        public static int ReplicaPort
+        {
+            get { return (int)Math.Max(0, Math.Min(65535,
+                Convert.ToInt32(Get("replica_port", 0), System.Globalization.CultureInfo.InvariantCulture))); }
+            set { Set("replica_port", (long)Math.Max(0, Math.Min(65535, value))); }
+        }
+
+        /// <summary>Общий секрет с основным хостом; без него реплика ничего не примет.</summary>
+        public static string ReplicaToken
+        {
+            get { return (string)Get("replica_token", "") ?? ""; }
+            set { Set("replica_token", value ?? ""); }
+        }
+
         // ------------------------------------------------------------- хранение
 
         private static readonly object Gate = new object();
@@ -120,7 +138,9 @@ namespace Hv86.Core
             return Json.Obj(
                 "text_font", TextFont,
                 "text_font_size", TextFontSize,
-                "capture_release", CaptureRelease);
+                "capture_release", CaptureRelease,
+                "replica_port", ReplicaPort,
+                "replica_token", ReplicaToken);
         }
 
         public static Dictionary<string, object> Apply(Dictionary<string, object> parameters)
@@ -134,6 +154,12 @@ namespace Hv86.Core
 
                 if (parameters.ContainsKey("capture_release"))
                     CaptureRelease = Json.GetString(parameters, "capture_release", "f8f12");
+
+                if (parameters.ContainsKey("replica_port"))
+                    ReplicaPort = Json.GetInt(parameters, "replica_port", 0);
+
+                if (parameters.ContainsKey("replica_token"))
+                    ReplicaToken = Json.GetString(parameters, "replica_token", "");
             }
 
             return View();

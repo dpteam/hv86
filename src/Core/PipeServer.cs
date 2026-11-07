@@ -19,7 +19,7 @@ namespace Hv86.Core
     }
 
     /// <summary>Ошибка, которую можно показать пользователю как есть.</summary>
-    public sealed class Hv86Exception : Exception
+    public class Hv86Exception : Exception
     {
         public Hv86Exception(string message) : base(message) { }
     }

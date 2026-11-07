@@ -137,6 +137,9 @@ namespace Hv86.App
                 case "migrate":
                     return Migrate(client, positional, json);
 
+                case "replicas":
+                    return Replicas(client, json);
+
                 case "create":
                     return Create(client, options, json);
 
@@ -448,6 +451,39 @@ namespace Hv86.App
                               " на " + Json.GetString(result, "to", "") +
                               "; снапшотов убрано: " + Json.GetInt(result, "snapshots", 0) +
                               ", чекпоинтов: " + Json.GetInt(result, "checkpoints", 0));
+
+            return 0;
+        }
+
+        /// <summary>
+        /// `replicas`: что этот хост принял от других машин. Команду имеет смысл
+        /// запускать на реплике - на основном хосте список обычно пуст.
+        /// </summary>
+        private static int Replicas(PipeClient client, bool json)
+        {
+            List<object> items = Result(client, "host.replicas", null, 15000) as List<object>
+                                 ?? new List<object>();
+
+            if (json) Console.WriteLine(Json.Pretty(items));
+
+            if (items.Count == 0)
+            {
+                Console.WriteLine("принятых реплик нет");
+                return 0;
+            }
+
+            foreach (object item in items)
+            {
+                Dictionary<string, object> replica = item as Dictionary<string, object>;
+                if (replica == null) continue;
+
+                Console.WriteLine(Json.GetString(replica, "vm_id", "") + "  " +
+                                  Json.GetString(replica, "name", "") + ": эпоха " +
+                                  Json.GetInt(replica, "epoch", 0) + ", state " +
+                                  Json.GetLong(replica, "seq", 0) + ", " +
+                                  Json.GetLong(replica, "age_sec", 0) + " с назад" +
+                                  (Json.GetBool(replica, "warm", false) ? "" : " (пусто)"));
+            }
 
             return 0;
         }
@@ -813,6 +849,7 @@ namespace Hv86.App
             Console.WriteLine("  hv86 --cli type <vm> \"текст\" [--enter]   набрать в госте");
             Console.WriteLine("  hv86 --cli floppy <vm> [next|prev|N]     сменить дискету комплекта");
             Console.WriteLine("  hv86 --cli migrate <vm>                  перенести ВМ на встроенный v86");
+            Console.WriteLine("  hv86 --cli replicas                     реплики, принятые этим хостом");
             Console.WriteLine("  hv86 --cli screen <vm>               текст с экрана (headless)");
             Console.WriteLine("  hv86 --cli create --name <имя> --preset <id> [--memory МБ] [--disk МБ] [--net relay] [--engine headless] [--share C:\\dir]");
             Console.WriteLine("  hv86 --cli create --name <имя> --iso <файл>");

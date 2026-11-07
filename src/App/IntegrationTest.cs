@@ -88,6 +88,10 @@ namespace Hv86.App
                 else
                     Fail("vm.migrate on a fresh VM: " + Json.Stringify(migration));
 
+                // приём реплик: служба должна реально открыть порт и принять
+                // базовый образ + state от «второй машины» (здесь - от теста)
+                CheckReplicaListener(client);
+
                 // проброс портов: host:2399 -> guest:22 (в FreeDOS TCP нет,
                 // поэтому ждём именно корректный отказ, а не данные)
                 const int forwardPort = 2399;
@@ -761,6 +765,103 @@ namespace Hv86.App
             {
                 return "error: " + ex.Message;
             }
+        }
+
+        /// <summary>
+        /// Приём реплик на самой службе: включаем настройкой хоста, отправляем
+        /// образ и state как «вторая машина», проверяем, что служба их приняла.
+        /// </summary>
+        private static void CheckReplicaListener(PipeClient client)
+        {
+            int port = FreePort();
+            const string token = "itest-token";
+
+            Call(client, "host.settings.set", Json.Obj(
+                "replica_port", port,
+                "replica_token", token), 15000);
+
+            string url = ReplicaClient.NormalizeUrl("http://localhost:" + port);
+
+            bool listening = false;
+
+            for (int attempt = 0; attempt < 20 && !listening; attempt++)
+            {
+                try
+                {
+                    ReplicaClient.HelloAsync(url, token, 5000).GetAwaiter().GetResult();
+                    listening = true;
+                }
+                catch (Exception)
+                {
+                    System.Threading.Thread.Sleep(250);
+                }
+            }
+
+            if (!listening)
+            {
+                Fail("replica listener did not start on port " + port);
+                Call(client, "host.settings.set", Json.Obj("replica_port", 0, "replica_token", ""), 15000);
+                return;
+            }
+
+            Ok("replica listener", "service accepts on port " + port);
+
+            try
+            {
+                string work = Path.Combine(Paths.Root, "replica-push");
+                Directory.CreateDirectory(work);
+
+                string disk = Path.Combine(work, "disk.img");
+                File.WriteAllBytes(disk, new byte[2 * 1024 * 1024]);
+
+                VmDefinition def = new VmDefinition();
+                def.Id = "itestrep";
+                def.Name = "itest-replica";
+
+                ReplicaClient.BeginAsync(url, token, def, disk, 1, 60000).GetAwaiter().GetResult();
+
+                string state = Path.Combine(work, "state.bin");
+                File.WriteAllBytes(state, new byte[1024 * 1024]);
+
+                ReplicaClient.PutStateAsync(url, token, def.Id, 1, 5, state, 60000).GetAwaiter().GetResult();
+
+                List<object> replicas = CallRaw(client, "host.replicas", null, 15000) as List<object>
+                                        ?? new List<object>();
+
+                bool found = false;
+
+                foreach (object item in replicas)
+                {
+                    Dictionary<string, object> replica = item as Dictionary<string, object>;
+                    if (replica == null) continue;
+
+                    if (Json.GetString(replica, "vm_id", "") == def.Id &&
+                        Json.GetLong(replica, "seq", 0) == 5 &&
+                        Json.GetBool(replica, "warm", false))
+                        found = true;
+                }
+
+                if (found) Ok("replica stored", "state accepted and visible via host.replicas");
+                else Fail("replica was not stored: " + Json.Stringify(replicas));
+            }
+            finally
+            {
+                // выключаем приёмник, чтобы не мешать остальным проверкам
+                Call(client, "host.settings.set", Json.Obj("replica_port", 0, "replica_token", ""), 15000);
+            }
+        }
+
+        /// <summary>Свободный TCP-порт для проверки приёмника реплик.</summary>
+        private static int FreePort()
+        {
+            System.Net.Sockets.TcpListener probe =
+                new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+
+            probe.Start();
+            int port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+            probe.Stop();
+
+            return port;
         }
 
         /// <summary>Ждёт, пока watchdog зафиксирует падение и начнёт перезапуск.</summary>

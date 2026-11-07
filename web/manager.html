@@ -333,6 +333,20 @@
         <div class="hint" data-i18n="host.captureHint">Capture is started by the button in the console toolbar; this only chooses how to let go.</div>
       </div>
 
+      <div class="field">
+        <div class="grid2">
+          <div>
+            <label data-i18n="host.replicaPort">Accept replicas on port (0 = off)</label>
+            <input type="number" id="hostReplicaPort" min="0" max="65535" step="1">
+          </div>
+          <div>
+            <label data-i18n="host.replicaToken">Replica token</label>
+            <input type="password" id="hostReplicaToken" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="hint" data-i18n="host.replicaHint">This host then accepts state from another hv86 (VM mode «remote»). Token must match on both sides; the listener needs the service and admin rights for a port on all interfaces.</div>
+      </div>
+
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
         <button class="btn ghost" data-close="hostSettingsModal" data-i18n="btn.cancel">Cancel</button>
         <button class="btn primary" data-act="host.settings.save" data-i18n="btn.save">Save</button>
@@ -424,6 +438,7 @@
               <option value="off">off</option>
               <option value="checkpoint">checkpoint</option>
               <option value="replica">replica</option>
+              <option value="remote">remote</option>
             </select>
           </div>
           <div>
@@ -432,6 +447,20 @@
           </div>
         </div>
         <div class="hint" data-i18n="set.ftHint">Replica keeps a second paused process in sync; it takes over after a crash. Web engine only.</div>
+      </div>
+
+      <div class="field" id="remoteReplicaFields">
+        <div class="grid2">
+          <div>
+            <label data-i18n="set.remoteUrl">Remote replica URL</label>
+            <input type="text" id="setRemoteUrl" placeholder="http://192.168.1.20:8600">
+          </div>
+          <div>
+            <label data-i18n="set.remoteToken">Shared token</label>
+            <input type="password" id="setRemoteToken" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="hint" data-i18n="set.remoteHint">State is pushed to the other host every checkpoint; the base disk once per boot. Promotion there is manual (`hv86 --cli promote`). LAN only, no TLS.</div>
       </div>
 
       <div class="field">

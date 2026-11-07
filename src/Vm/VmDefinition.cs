@@ -74,12 +74,24 @@ namespace Hv86.Vm
         public int TextFontSize;
 
         // Динамическая отказоустойчивость
-        public string FtMode = "checkpoint";          // off | checkpoint | replica (позже)
+        public string FtMode = "checkpoint";          // off | checkpoint | replica | remote
         public int FtIntervalMs = 15000;
         public int FtKeep = 3;
         public string Restart = RestartPolicy.OnFailure;
         public int MaxAttempts = 5;
         public bool RestoreOnCrash = true;
+
+        /// <summary>Адрес удалённой реплики (ft.mode = remote), например http://host:8600.</summary>
+        public string ReplicaUrl = "";
+
+        /// <summary>Общий секрет с репликой: сравнивается на её стороне.</summary>
+        public string ReplicaToken = "";
+
+        /// <summary>
+        /// Эпоха репликации: растёт при каждом старте ВМ. Базовый образ на
+        /// реплике принадлежит конкретной эпохе - state из другой эпохи не примут.
+        /// </summary>
+        public int ReplicaEpoch;
 
         // Состояние (обновляет служба, не пользователь)
         public string State = "stopped";
@@ -128,7 +140,10 @@ namespace Hv86.Vm
                 "keep", FtKeep,
                 "restart", Restart,
                 "max_attempts", MaxAttempts,
-                "restore_on_crash", RestoreOnCrash);
+                "restore_on_crash", RestoreOnCrash,
+                "replica_url", ReplicaUrl ?? "",
+                "replica_token", ReplicaToken ?? "",
+                "replica_epoch", ReplicaEpoch);
 
             Dictionary<string, object> netBlock = Json.Obj(
                     "type", NetType,
@@ -288,6 +303,9 @@ namespace Hv86.Vm
                 vm.Restart = Json.GetString(ft, "restart", RestartPolicy.OnFailure);
                 vm.MaxAttempts = Json.GetInt(ft, "max_attempts", 5);
                 vm.RestoreOnCrash = Json.GetBool(ft, "restore_on_crash", true);
+                vm.ReplicaUrl = Json.GetString(ft, "replica_url", "");
+                vm.ReplicaToken = Json.GetString(ft, "replica_token", "");
+                vm.ReplicaEpoch = Json.GetInt(ft, "replica_epoch", 0);
             }
 
             vm.State = Json.GetString(map, "state", "stopped");
@@ -323,6 +341,9 @@ namespace Hv86.Vm
                 "egress_mode", EgressMode,
                 "egress_allow", ViewAllow(),
                 "ft_mode", FtMode,
+                "replica_url", ReplicaUrl,
+                "replica_token", ReplicaToken,
+                "replica_epoch", ReplicaEpoch,
                 "text_font", TextFont,
                 "text_font_size", TextFontSize,
                 "restart", Restart,

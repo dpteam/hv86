@@ -18,6 +18,8 @@ namespace Hv86.App
         private VmManager _manager;
         private PipeServer _server;
         private Timer _timer;
+        private ReplicaServer _replica;
+        private int _replicaPort;
         private readonly DateTime _startedUtc = DateTime.UtcNow;
 
         public void Start()
@@ -37,13 +39,58 @@ namespace Hv86.App
             _timer = new Timer(delegate { try { _manager.Tick(); } catch (Exception ex) { Log.Exception("FT", "тик", ex); } },
                 null, 2000, 2000);
 
+            ApplyReplicaListener();
+
             _manager.StartAutostart();
+        }
+
+        /// <summary>
+        /// Приём реплик с другой машины: включается настройкой хоста, а не
+        /// флагом командной строки - служба и так знает свой hv86.json.
+        /// </summary>
+        private void ApplyReplicaListener()
+        {
+            int port = HostSettings.ReplicaPort;
+            string token = HostSettings.ReplicaToken;
+
+            if (_replica != null && _replicaPort == port && port > 0) return;
+
+            try { _replica?.Dispose(); } catch { }
+            _replica = null;
+            _replicaPort = 0;
+
+            if (port <= 0) return;
+
+            if (token.Length == 0)
+            {
+                Log.Warn("REPL", "порт реплики " + port + " задан, но токен пуст: приём не включён");
+                return;
+            }
+
+            try
+            {
+                ReplicaServer server = new ReplicaServer(ReplicaStore.Default(), port, token);
+                server.Start();
+
+                _replica = server;
+                _replicaPort = port;
+
+                Log.Info("REPL", "приём реплик включён на порту " + port);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("REPL", "не удалось включить приём реплик: " + ex.Message);
+            }
         }
 
         public void Stop()
         {
             try { _timer?.Dispose(); } catch { }
             _timer = null;
+
+            try { _replica?.Dispose(); } catch { }
+            _replica = null;
+            _replicaPort = 0;
 
             try { _manager?.StopAll(); } catch (Exception ex) { Log.Exception("SVC", "остановка ВМ", ex); }
 
@@ -78,12 +125,23 @@ namespace Hv86.App
                 case "host.log":
                     return Json.Obj("text", Log.Tail(Json.GetInt(parameters, "lines", 200)));
 
-                // настройки хоста: сейчас только шрифт текстового режима
+                // настройки хоста: шрифт текстового режима, захват мыши, приём реплик
                 case "host.settings":
                     return HostSettings.View();
 
                 case "host.settings.set":
-                    return HostSettings.Apply(parameters);
+                {
+                    Dictionary<string, object> view = HostSettings.Apply(parameters);
+
+                    // порт/токен могли поменять - перезапускаем приёмник
+                    ApplyReplicaListener();
+
+                    return view;
+                }
+
+                // локальные реплики, принятые этим хостом
+                case "host.replicas":
+                    return _manager.LocalReplicas();
 
                 case "vm.list":
                     return _manager.ListView();

@@ -42,6 +42,7 @@ namespace Hv86.App
                 TestImagePack(dir);
                 TestShare(dir);
                 TestVmUpgrade(dir);
+                TestReplica(dir);
             }
             catch (Exception ex)
             {
@@ -607,6 +608,112 @@ namespace Hv86.App
                 "upgrade: summary reports what was removed");
             Check(vm.State == "stopped" && vm.Restarts == 0 && vm.LastError.Length == 0,
                 "upgrade: VM is left in a clean stopped state");
+        }
+
+        /// <summary>
+        /// Протокол реплики по сети: приёмник на localhost, клиент из
+        /// Vm/ReplicaClient.cs. Проверяем ровно то, на чём держится
+        /// согласованность: токен, эпоха, порядок seq и дубликаты.
+        /// </summary>
+        private static void TestReplica(string dir)
+        {
+            string work = Path.Combine(dir, "replica");
+            Directory.CreateDirectory(work);
+
+            int port = FreePort();
+            ReplicaStore store = new ReplicaStore(Path.Combine(work, "store"));
+
+            using (ReplicaServer server = new ReplicaServer(store, port, "s3cret", false))
+            {
+                server.Start();
+
+                string url = ReplicaClient.NormalizeUrl("http://localhost:" + port);
+
+                Dictionary<string, object> hello = ReplicaClient.HelloAsync(url, "s3cret", 15000)
+                    .GetAwaiter().GetResult();
+
+                Check(Json.GetString(hello, "v86", "") == AppInfo.V86Version,
+                    "replica: hello reports the bundled engine");
+
+                bool denied = false;
+
+                try { ReplicaClient.HelloAsync(url, "wrong", 15000).GetAwaiter().GetResult(); }
+                catch (Hv86Exception) { denied = true; }
+
+                Check(denied, "replica: wrong token is refused");
+
+                string disk = Path.Combine(work, "base.img");
+                File.WriteAllBytes(disk, new byte[4 * 1024 * 1024]);
+
+                VmDefinition vm = new VmDefinition();
+                vm.Id = "repltest";
+                vm.Name = "repl";
+
+                Dictionary<string, object> begin = ReplicaClient.BeginAsync(url, "s3cret", vm, disk, 3, 60000)
+                    .GetAwaiter().GetResult();
+
+                Check(Json.GetInt(begin, "epoch", 0) == 3 &&
+                      Json.GetLong(begin, "disk_size", 0) == 4 * 1024 * 1024,
+                    "replica: base image of the epoch accepted");
+
+                Check(File.Exists(Path.Combine(store.Dir("repltest"), "disk.img")) &&
+                      !File.Exists(Path.Combine(store.Dir("repltest"), "disk.img.part")),
+                    "replica: base image stored atomically");
+
+                string state1 = Path.Combine(work, "state1.bin");
+                File.WriteAllBytes(state1, new byte[2 * 1024 * 1024]);
+
+                Dictionary<string, object> put1 = ReplicaClient.PutStateAsync(url, "s3cret", "repltest", 3, 1,
+                    state1, 60000).GetAwaiter().GetResult();
+
+                Check(Json.GetBool(put1, "ok", false) && !Json.GetBool(put1, "duplicate", true),
+                    "replica: state is accepted");
+
+                Dictionary<string, object> again = ReplicaClient.PutStateAsync(url, "s3cret", "repltest", 3, 1,
+                    state1, 60000).GetAwaiter().GetResult();
+
+                Check(Json.GetBool(again, "duplicate", false),
+                    "replica: repeated seq is a duplicate, not an error");
+
+                bool staleRefused = false;
+
+                try
+                {
+                    ReplicaClient.PutStateAsync(url, "s3cret", "repltest", 2, 2, state1, 60000)
+                        .GetAwaiter().GetResult();
+                }
+                catch (Hv86Exception ex) { staleRefused = ex.Message.IndexOf("409", StringComparison.Ordinal) >= 0; }
+
+                Check(staleRefused, "replica: state from another epoch is refused with 409");
+
+                Dictionary<string, object> status = ReplicaClient.StatusAsync(url, "s3cret", "repltest", 15000)
+                    .GetAwaiter().GetResult();
+
+                Check(Json.GetLong(status, "seq", 0) == 1 && Json.GetBool(status, "warm", false) &&
+                      Json.GetInt(status, "epoch", 0) == 3,
+                    "replica: status reports epoch, seq and warm state");
+
+                // «не начата» - это конфликт, а не пустой ответ
+                bool missing = false;
+
+                try { ReplicaClient.StatusAsync(url, "s3cret", "nope", 15000).GetAwaiter().GetResult(); }
+                catch (Hv86Exception) { missing = true; }
+
+                Check(missing, "replica: unknown VM is reported as an error");
+            }
+        }
+
+        /// <summary>Свободный TCP-порт для тестового приёмника реплик.</summary>
+        private static int FreePort()
+        {
+            System.Net.Sockets.TcpListener probe =
+                new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+
+            probe.Start();
+            int port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+            probe.Stop();
+
+            return port;
         }
 
         private static void TestShare(string dir)

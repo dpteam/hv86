@@ -55,6 +55,13 @@ namespace Hv86.Vm
             public DateTime ReplicaUtc = DateTime.UtcNow;
             public bool ReplicaStarting;
 
+            // удалённая реплика (ft.mode=remote): образ и state уезжают по сети
+            public string RemoteState = "";
+            public DateTime RemoteUtc = DateTime.UtcNow;
+            public string RemoteError = "";
+            public long RemoteSeq;
+            public bool RemoteBusy;
+
             // окно, открытое для выключенной ВМ: гостя внутри нет, но к нему
             // можно подключиться (как в Hyper-V) и запустить оттуда
             public VmProcess Idle;
@@ -155,6 +162,11 @@ namespace Hv86.Vm
                 view["relay_clients"] = runtime.RelayClients;
                 view["pipe"] = runtime.Proc == null ? "" : runtime.Proc.PipeName;
                 view["replica"] = runtime.ReplicaState;
+                view["remote_state"] = runtime.RemoteState;
+                view["remote_age_sec"] = runtime.RemoteUtc == default(DateTime)
+                    ? 0
+                    : (long)Math.Max(0, (DateTime.UtcNow - runtime.RemoteUtc).TotalSeconds);
+                view["remote_error"] = runtime.RemoteError;
                 view["idle"] = runtime.Idle != null && !runtime.Idle.HasExited;
 
                 list.Add(view);
@@ -176,8 +188,43 @@ namespace Hv86.Vm
             view["pipe"] = runtime.Proc == null ? "" : runtime.Proc.PipeName;
             view["replica"] = runtime.ReplicaState;
             view["replica_alive"] = runtime.Replica != null && !runtime.Replica.HasExited;
+            view["remote_state"] = runtime.RemoteState;
+            view["remote_age_sec"] = runtime.RemoteUtc == default(DateTime)
+                ? 0
+                : (long)Math.Max(0, (DateTime.UtcNow - runtime.RemoteUtc).TotalSeconds);
+            view["remote_error"] = runtime.RemoteError;
             view["idle"] = runtime.Idle != null && !runtime.Idle.HasExited;
             return view;
+        }
+
+        /// <summary>
+        /// Реплики, принятые этим хостом (для оператора: что у нас лежит и
+        /// насколько свежее). Смотреть их имеет смысл только на реплике.
+        /// </summary>
+        public List<object> LocalReplicas()
+        {
+            List<object> list = new List<object>();
+            ReplicaStore store = ReplicaStore.Default();
+
+            try
+            {
+                if (!System.IO.Directory.Exists(store.Root)) return list;
+
+                foreach (string dir in System.IO.Directory.GetDirectories(store.Root))
+                {
+                    string id = System.IO.Path.GetFileName(dir);
+                    if (!ReplicaStore.IsSafeId(id)) continue;
+
+                    try { list.Add(store.Status(id)); }
+                    catch (Exception ex) { Log.Warn("REPL", "реплика " + id + ": " + ex.Message); }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("REPL", "список реплик: " + ex.Message);
+            }
+
+            return list;
         }
 
         public List<object> Presets()
@@ -196,6 +243,8 @@ namespace Hv86.Vm
                     "disk_mb", Json.GetInt(preset, "disk_mb", 0),
                     "boot", Json.GetString(preset, "boot", "auto"),
                     "size", Json.GetLong(preset, "size", 0),
+                    "floppy_set", Json.GetBool(preset, "floppy_set", false),
+                    "floppy_count", Json.GetInt(preset, "floppy_count", 0),
                     "source", Json.GetString(preset, "source", "")));
             }
 
@@ -475,6 +524,22 @@ namespace Hv86.Vm
                     Log.Info("FT", "реплика: headless-движок не умеет, для " + id + " остаются чекпоинты");
                 else
                     StartReplica(runtime);
+            }
+
+            // удалённая реплика: новая эпоха, потому что образ диска с этого
+            // момента - другой (ВМ стартовала с того, что на диске сейчас)
+            if (runtime.Def.FtMode == "remote")
+            {
+                int epoch;
+
+                lock (_gate)
+                {
+                    runtime.Def.ReplicaEpoch++;
+                    epoch = runtime.Def.ReplicaEpoch;
+                    try { VmStore.Save(runtime.Def); } catch { }
+                }
+
+                PushRemoteBase(runtime, epoch);
             }
 
             return runtime.Def.ToView();
@@ -927,7 +992,39 @@ namespace Hv86.Vm
                     def.Engine = engine;
 
                 string mode = Json.GetString(parameters, "ft_mode", def.FtMode);
-                if (mode == "off" || mode == "checkpoint" || mode == "replica") def.FtMode = mode;
+                if (mode == "off" || mode == "checkpoint" || mode == "replica" || mode == "remote")
+                    def.FtMode = mode;
+
+                // удалённая реплика: адрес и токен проверяем сразу, чтобы отказ
+                // был при сохранении настроек, а не через 15 секунд в логе
+                if (parameters.ContainsKey("replica_url"))
+                {
+                    string url = (Json.GetString(parameters, "replica_url", "") ?? "").Trim();
+
+                    // сохранение прочих настроек у работающей ВМ не должно падать:
+                    // проверяем только реальное изменение адреса
+                    if (url != (def.ReplicaUrl ?? ""))
+                    {
+                        if (url.Length > 0)
+                        {
+                            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                                throw new Hv86Exception("адрес реплики должен начинаться с http:// или https://");
+
+                            if (running || def.State != "stopped")
+                                throw new Hv86Exception("удалённую реплику включают у остановленной ВМ: " +
+                                                        "базовый образ отправляется при старте");
+                        }
+
+                        def.ReplicaUrl = url;
+                    }
+                }
+
+                if (parameters.ContainsKey("replica_token"))
+                    def.ReplicaToken = Json.GetString(parameters, "replica_token", "") ?? "";
+
+                if (def.FtMode == "remote" && def.ReplicaUrl.Length > 0 && def.ReplicaToken.Length == 0)
+                    throw new Hv86Exception("для удалённой реплики нужен общий токен: без него она не примет состояние");
 
                 def.FtIntervalMs = Math.Max(2000, Math.Min(600000,
                     Json.GetInt(parameters, "ft_interval_ms", def.FtIntervalMs)));
@@ -1247,6 +1344,11 @@ namespace Hv86.Vm
 
                     if (replica != null && !replica.HasExited)
                         await PushReplicaStateAsync(runtime, replica, saved).ConfigureAwait(false);
+
+                    // удалённая реплика: тот же файл уезжает по сети, но своей
+                    // очередью - медленная сеть не должна тормозить чекпоинты
+                    if (runtime.Def.FtMode == "remote")
+                        PushRemoteState(runtime, saved);
                 }
                 catch (Exception ex)
                 {
@@ -1462,6 +1564,145 @@ namespace Hv86.Vm
         /// основной без холодной загрузки. Возвращает true, если ВМ продолжает
         /// работать уже на втором процессе.
         /// </summary>
+        /// <summary>
+        /// Отправляет базовый образ на удалённую реплику (новая эпоха). Образ
+        /// уезжает целиком: state кумулятивен относительно образа на момент
+        /// старта ВМ, поэтому реплике нужен именно он.
+        /// </summary>
+        private void PushRemoteBase(VmRuntime runtime, int epoch)
+        {
+            VmDefinition def = runtime.Def;
+
+            if (string.IsNullOrEmpty(def.ReplicaUrl)) return;
+
+            if (!def.HasHda)
+            {
+                Log.Warn("FT", "удалённая реплика " + def.Id + ": нет образа диска, реплицировать нечего");
+                return;
+            }
+
+            string disk = def.HdaPath;
+            string url = ReplicaClient.NormalizeUrl(def.ReplicaUrl);
+            string token = def.ReplicaToken;
+            string id = def.Id;
+
+            lock (_gate)
+            {
+                runtime.RemoteState = "base";
+                runtime.RemoteError = "";
+                runtime.RemoteSeq = 0;
+            }
+
+            Log.Info("FT", "реплика " + id + ": отправляю образ эпохи " + epoch + " (" +
+                           (new FileInfo(disk).Length / 1024 / 1024) + " МБ)");
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    Dictionary<string, object> meta = await ReplicaClient.BeginAsync(url, token, def, disk, epoch,
+                        1800000).ConfigureAwait(false);
+
+                    lock (_gate)
+                    {
+                        // пока копировали, ВМ могли остановить и запустить снова:
+                        // тогда актуальна уже другая эпоха, и этот ответ - старый
+                        if (def.ReplicaEpoch != epoch) return;
+
+                        runtime.RemoteState = "ok";
+                        runtime.RemoteUtc = DateTime.UtcNow;
+                    }
+
+                    Emit("ft.event", Json.Obj(
+                        "id", id,
+                        "kind", "replica-base",
+                        "text", "Реплика приняла образ эпохи " + Json.GetInt(meta, "epoch", epoch),
+                        "utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+                }
+                catch (Exception ex)
+                {
+                    lock (_gate)
+                    {
+                        runtime.RemoteState = "error";
+                        runtime.RemoteError = ex.Message;
+                    }
+
+                    Log.Warn("FT", "реплика " + id + " не приняла образ: " + ex.Message);
+                }
+            });
+        }
+
+        /// <summary>
+        /// Отправляет state на удалённую реплику. Не блокирует чекпоинты: если
+        /// прошлая отправка ещё идёт, этот чекпоинт пропускаем - лучше отстать
+        /// на два интервала, чем накопить очередь из state-файлов.
+        /// </summary>
+        private void PushRemoteState(VmRuntime runtime, string statePath)
+        {
+            VmDefinition def = runtime.Def;
+
+            if (string.IsNullOrEmpty(def.ReplicaUrl)) return;
+
+            bool busy;
+
+            lock (_gate) busy = runtime.RemoteBusy;
+
+            if (busy)
+            {
+                Log.Warn("FT", "реплика " + def.Id + ": прошлая отправка ещё идёт, чекпоинт пропущен");
+                return;
+            }
+
+            long seq = DateTime.UtcNow.Ticks;
+            string url = ReplicaClient.NormalizeUrl(def.ReplicaUrl);
+            string token = def.ReplicaToken;
+            int epoch = def.ReplicaEpoch;
+            string id = def.Id;
+
+            lock (_gate)
+            {
+                runtime.RemoteBusy = true;
+                runtime.RemoteState = "pushing";
+            }
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    Dictionary<string, object> result = await ReplicaClient.PutStateAsync(url, token, id, epoch,
+                        seq, statePath, 600000).ConfigureAwait(false);
+
+                    lock (_gate)
+                    {
+                        if (Json.GetBool(result, "duplicate", false))
+                        {
+                            runtime.RemoteState = "ok";
+                            return;
+                        }
+
+                        runtime.RemoteState = "ok";
+                        runtime.RemoteUtc = DateTime.UtcNow;
+                        runtime.RemoteSeq = seq;
+                        runtime.RemoteError = "";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    lock (_gate)
+                    {
+                        runtime.RemoteState = "error";
+                        runtime.RemoteError = ex.Message;
+                    }
+
+                    Log.Warn("FT", "реплика " + id + ": " + ex.Message);
+                }
+                finally
+                {
+                    lock (_gate) runtime.RemoteBusy = false;
+                }
+            });
+        }
+
         private async Task<bool> TryPromoteAsync(VmRuntime runtime, string reason)
         {
             VmProcess replica;
