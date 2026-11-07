@@ -54,6 +54,20 @@ namespace Hv86.Vm
             get { return _hostPrefix == "+"; }
         }
 
+        /// <summary>
+        /// Адрес, по которому приёмник реально отвечает. Клиенту нужно ходить
+        /// именно сюда: у `+` локальный вход - 127.0.0.1, у `localhost` - localhost.
+        /// </summary>
+        public string BaseUrl
+        {
+            get
+            {
+                string host = _hostPrefix == "+" ? "127.0.0.1" : _hostPrefix;
+
+                return "http://" + host + ":" + _port + PathPrefix;
+            }
+        }
+
         public string Url
         {
             get { return "http://" + (_hostPrefix == "+" ? "127.0.0.1" : _hostPrefix) + ":" + _port + PathPrefix; }
@@ -61,30 +75,46 @@ namespace Hv86.Vm
 
         public void Start()
         {
-            try
-            {
-                Open(_hostPrefix);
-            }
-            catch (HttpListenerException ex)
-            {
-                // порт на всех интерфейсах требует прав администратора или
-                // urlacl. Молча не отключаемся: пробуем localhost и говорим
-                // вслух, что реплика теперь видна только с этой машины.
-                if (!_preferAll) throw new Hv86Exception("не удалось открыть порт реплики " + _port + ": " + ex.Message);
+            // Порядок попыток: сначала то, что просили, потом запасные варианты.
+            // На разных машинах (и в CI) http.sys разрешает разное: `+` требует
+            // прав/urlacl, `localhost` иногда не поднимается без IPv6, а
+            // 127.0.0.1 работает почти всегда. Молча не сдаёмся - пишем в лог,
+            // какой вариант получился.
+            string[] attempts = _preferAll
+                ? new[] { "+", "localhost", "127.0.0.1" }
+                : new[] { "localhost", "127.0.0.1" };
 
-                Log.Warn("REPL", "порт " + _port + " на всех интерфейсах недоступен (" + ex.Message +
-                                 "): слушаю только localhost");
+            Exception last = null;
 
-                _hostPrefix = "localhost";
-                Open(_hostPrefix);
+            foreach (string host in attempts)
+            {
+                try
+                {
+                    Open(host);
+                    _hostPrefix = host;
+                    last = null;
+                    break;
+                }
+                catch (HttpListenerException ex)
+                {
+                    last = ex;
+                    Log.Warn("REPL", "порт " + _port + " на \"" + host + "\": " + ex.Message);
+                }
             }
+
+            if (last != null)
+                throw new Hv86Exception("не удалось открыть порт реплики " + _port + ": " + last.Message);
+
+            if (!_preferAll && _hostPrefix != "localhost")
+                Log.Warn("REPL", "localhost недоступен, слушаю " + _hostPrefix + " (только эта машина)");
+            else if (_preferAll && !BoundAll)
+                Log.Warn("REPL", "все интерфейсы недоступны, слушаю " + _hostPrefix + " (только эта машина)");
 
             _cancel = new CancellationTokenSource();
 
             Task.Run(() => AcceptLoopAsync(_cancel.Token));
 
-            Log.Info("REPL", "приём реплик на порту " + _port +
-                             (BoundAll ? " (все интерфейсы)" : " (только эта машина)"));
+            Log.Info("REPL", "приём реплик на порту " + _port + " (" + _hostPrefix + ")");
         }
 
         private void Open(string hostPrefix)

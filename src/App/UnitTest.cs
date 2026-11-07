@@ -46,7 +46,8 @@ namespace Hv86.App
             }
             catch (Exception ex)
             {
-                Fail("unexpected exception: " + ex);
+                // ex.ToString(), а не Message: в CI по одному тексту не видно, где упало
+                Fail("unexpected exception: " + ex.ToString());
             }
             finally
             {
@@ -627,7 +628,8 @@ namespace Hv86.App
             {
                 server.Start();
 
-                string url = ReplicaClient.NormalizeUrl("http://localhost:" + port);
+                // адрес берём у самого приёмника: он мог выбрать не localhost
+                string url = server.BaseUrl;
 
                 Dictionary<string, object> hello = ReplicaClient.HelloAsync(url, "s3cret", 15000)
                     .GetAwaiter().GetResult();

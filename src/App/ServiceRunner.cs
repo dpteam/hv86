@@ -119,6 +119,7 @@ namespace Hv86.App
                     Dictionary<string, object> status = _manager.HostStatus();
                     status["service_started_utc"] = _startedUtc.ToString("o");
                     status["clients"] = _server == null ? 0 : _server.ClientCount;
+                    status["replica_url"] = _replica == null ? "" : _replica.BaseUrl;
                     return status;
                 }
 

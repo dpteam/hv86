@@ -802,6 +802,28 @@ namespace Hv86.App
                 }
             }
 
+            // приёмник мог сесть не на localhost (в CI http.sys решает по-своему):
+            // тогда берём адрес, который он сам сообщает в host.status
+            if (!listening)
+            {
+                try
+                {
+                    Dictionary<string, object> status = Call(client, "host.status", null, 15000);
+                    string bound = Json.GetString(status, "replica_url", "");
+
+                    if (bound.Length > 0)
+                    {
+                        url = bound;
+                        ReplicaClient.HelloAsync(url, token, 5000).GetAwaiter().GetResult();
+                        listening = true;
+                    }
+                }
+                catch (Exception)
+                {
+                    // ниже разберёмся, что именно не поднялось
+                }
+            }
+
             if (!listening)
             {
                 Fail("replica listener did not start on port " + port);
